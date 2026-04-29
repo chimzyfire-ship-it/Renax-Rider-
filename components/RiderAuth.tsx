@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Pressable,
-  Platform, Image, KeyboardAvoidingView, ScrollView,
+  Platform, Image, KeyboardAvoidingView, ScrollView, useWindowDimensions,
 } from 'react-native';
 import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } from '@expo-google-fonts/plus-jakarta-sans';
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
@@ -11,6 +11,8 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { ArrowRight, Phone, ShieldCheck, Lock } from 'lucide-react-native';
 
 export default function RiderAuth({ onAuthenticated }) {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 480;
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_8: PlusJakartaSans_800ExtraBold,
     PlusJakartaSans_6: PlusJakartaSans_600SemiBold,
@@ -78,7 +80,7 @@ export default function RiderAuth({ onAuthenticated }) {
           </Animated.View>
 
           {/* Card */}
-          <Animated.View entering={FadeInDown.duration(600).delay(200)} style={styles.card}>
+          <Animated.View entering={FadeInDown.duration(600).delay(200)} style={[styles.card, isCompact && styles.cardCompact]}>
 
             {step === 'phone' ? (
               <>
@@ -202,6 +204,10 @@ const styles = StyleSheet.create({
     padding: 36,
     alignItems: 'center',
     ...(Platform.OS === 'web' ? { backdropFilter: 'blur(20px)' } : {}),
+  },
+  cardCompact: {
+    padding: 22,
+    borderRadius: 18,
   },
   cardTitle: {
     fontFamily: 'PlusJakartaSans_8',
