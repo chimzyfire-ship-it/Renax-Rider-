@@ -1,6 +1,6 @@
 // RiderDashboard.tsx — Main Rider App Shell with bottom tab navigation
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, useWindowDimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } from '@expo-google-fonts/plus-jakarta-sans';
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
@@ -22,6 +22,8 @@ const TABS = [
 ];
 
 export default function RiderDashboard({ rider, onLogout }) {
+  const { width } = useWindowDimensions();
+  const isWebWide = Platform.OS === 'web' && width >= 768;
   const [activeTab, setActiveTab] = useState('home');
   const [activeJob, setActiveJob] = useState<any>(null);
   const defaultProfile = useMemo(() => ({
@@ -106,7 +108,7 @@ export default function RiderDashboard({ rider, onLogout }) {
   return (
     <View style={styles.root}>
       {/* Screen */}
-      <View style={styles.content}>
+      <View style={[styles.content, isWebWide && styles.contentWeb]}>
         {renderScreen()}
       </View>
 
@@ -145,6 +147,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentWeb: {
+    width: '100%',
+    maxWidth: 960,
+    alignSelf: 'center',
   },
   tabBar: {
     flexDirection: 'row',
