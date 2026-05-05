@@ -47,6 +47,12 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "RENAX Rider uses the camera to scan QR proofs and capture delivery evidence."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
