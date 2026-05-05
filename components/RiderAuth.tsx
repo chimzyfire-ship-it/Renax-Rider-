@@ -1,4 +1,3 @@
-// RiderAuth.tsx — Phone OTP Login, exact RENAX brand style
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Pressable,
@@ -8,7 +7,8 @@ import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } f
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { ArrowRight, Phone, ShieldCheck, Lock } from 'lucide-react-native';
+import { ArrowRight, Mail, Lock, User, Phone } from 'lucide-react-native';
+import { supabase } from '../supabase';
 
 export default function RiderAuth({ onAuthenticated }) {
   const { width } = useWindowDimensions();
@@ -21,40 +21,86 @@ export default function RiderAuth({ onAuthenticated }) {
     Outfit_7: Outfit_700Bold,
   });
 
-  const [step, setStep] = useState<'phone' | 'otp'>('phone');
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
+  const [stateValue, setStateValue] = useState('Lagos');
+  const [city, setCity] = useState('Ikeja');
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   if (!fontsLoaded) return null;
 
-  const sendOtp = () => {
-    if (phone.length < 7) return;
+  const signIn = async () => {
+    if (!email.trim() || !password) {
+      setMessage('Enter your rider email and password.');
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); setStep('otp'); }, 1200);
+    setMessage('');
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) throw error;
+      onAuthenticated?.();
+    } catch (error) {
+      setMessage(error?.message || 'Could not sign in.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const verifyOtp = () => {
-    if (otp.length < 4) return;
+  const signUp = async () => {
+    if (!name.trim() || !email.trim() || !password || !phone.trim()) {
+      setMessage('Complete all rider signup fields first.');
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      onAuthenticated({
-        id: phone || 'demo-rider',
-        name: 'Rider',
-        phone,
-        state: 'Lagos',
-        city: 'Ikeja',
-        terminalCode: 'LOS',
-        vehicle: 'Motorcycle',
-        plate: 'LGA-123-XY',
+    setMessage('');
+
+    try {
+      const trimmedEmail = email.trim();
+      const trimmedPhone = phone.trim();
+
+      const { data, error } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password,
       });
-    }, 1000);
+
+      if (error) throw error;
+      if (!data.user) throw new Error('Rider signup did not return a user account.');
+
+      const { error: profileError } = await supabase.from('profiles').upsert({
+        id: data.user.id,
+        email: trimmedEmail,
+        role: 'driver',
+        full_name: name.trim(),
+        phone_number: trimmedPhone,
+        state: stateValue.trim() || 'Lagos',
+        city: city.trim() || 'Ikeja',
+      });
+
+      if (profileError) throw profileError;
+
+      setMessage('Rider account created. You are now signed in.');
+      onAuthenticated?.();
+    } catch (error) {
+      setMessage(error?.message || 'Could not create rider account.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#020f09' }}>
-      {/* Background image */}
       <Image
         source={require('../assets/images/Sign in page background .png')}
         style={StyleSheet.absoluteFillObject as any}
@@ -67,7 +113,6 @@ export default function RiderAuth({ onAuthenticated }) {
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          {/* Logo */}
           <Animated.View entering={FadeIn.duration(900)} style={styles.logoWrap}>
             <Image
               source={require('../assets/images/logo.jpg')}
@@ -79,81 +124,147 @@ export default function RiderAuth({ onAuthenticated }) {
             </View>
           </Animated.View>
 
-          {/* Card */}
           <Animated.View entering={FadeInDown.duration(600).delay(200)} style={[styles.card, isCompact && styles.cardCompact]}>
+            <View style={styles.tabRow}>
+              <Pressable style={[styles.tab, mode === 'signin' && styles.tabActive]} onPress={() => setMode('signin')}>
+                <Text style={[styles.tabText, mode === 'signin' && styles.tabTextActive]}>Sign In</Text>
+              </Pressable>
+              <Pressable style={[styles.tab, mode === 'signup' && styles.tabActive]} onPress={() => setMode('signup')}>
+                <Text style={[styles.tabText, mode === 'signup' && styles.tabTextActive]}>Create Rider</Text>
+              </Pressable>
+            </View>
 
-            {step === 'phone' ? (
+            {mode === 'signin' ? (
               <>
-                <Phone color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
-                <Text style={styles.cardTitle}>Enter Your Phone Number</Text>
-                <Text style={styles.cardSub}>We&apos;ll send a 6-digit code to verify it&apos;s you. No passwords needed.</Text>
+                <Mail color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
+                <Text style={styles.cardTitle}>Rider Sign In</Text>
+                <Text style={styles.cardSub}>Use your rider email and password. Phone OTP will come later when SMS auth is connected.</Text>
 
-                {/* Phone Input */}
-                <View style={styles.phoneRow}>
-                  <View style={styles.countryCode}>
-                    <Text style={styles.countryCodeText}>+234</Text>
-                  </View>
+                <View style={styles.inputWrap}>
+                  <Mail color="#6B7280" size={16} />
                   <TextInput
-                    style={styles.phoneInput}
-                    placeholder="801 234 5678"
+                    style={styles.input}
+                    placeholder="rider@renax.ng"
                     placeholderTextColor="#3a5c47"
-                    keyboardType="phone-pad"
-                    value={phone}
-                    onChangeText={setPhone}
-                    maxLength={11}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    value={email}
+                    onChangeText={setEmail}
+                  />
+                </View>
+
+                <View style={styles.inputWrap}>
+                  <Lock color="#6B7280" size={16} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor="#3a5c47"
+                    secureTextEntry
+                    value={password}
+                    onChangeText={setPassword}
                   />
                 </View>
 
                 <Pressable
-                  style={[styles.bigBtn, (!phone || phone.length < 7) && { opacity: 0.45 }]}
-                  onPress={sendOtp}
-                  disabled={loading || phone.length < 7}
+                  style={[styles.bigBtn, loading && { opacity: 0.6 }]}
+                  onPress={signIn}
+                  disabled={loading}
                 >
-                  <Text style={styles.bigBtnText}>{loading ? 'Sending...' : 'SEND CODE'}</Text>
+                  <Text style={styles.bigBtnText}>{loading ? 'Signing in...' : 'SIGN IN'}</Text>
                   <ArrowRight color="#002B22" size={22} />
                 </Pressable>
               </>
             ) : (
               <>
-                <ShieldCheck color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
-                <Text style={styles.cardTitle}>Enter the 6-Digit Code</Text>
-                <Text style={styles.cardSub}>We sent a verification code to{'\n'}
-                  <Text style={{ color: '#ccfd3a' }}>+234 {phone}</Text>
-                </Text>
+                <User color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
+                <Text style={styles.cardTitle}>Create Test Rider Account</Text>
+                <Text style={styles.cardSub}>Use a real email and password for auth. The phone number can still be mock data for testing.</Text>
 
-                <TextInput
-                  style={styles.otpInput}
-                  placeholder="------"
-                  placeholderTextColor="#3a5c47"
-                  keyboardType="number-pad"
-                  value={otp}
-                  onChangeText={setOtp}
-                  maxLength={6}
-                  textAlign="center"
-                />
+                <View style={styles.inputWrap}>
+                  <User color="#6B7280" size={16} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Rider name"
+                    placeholderTextColor="#3a5c47"
+                    value={name}
+                    onChangeText={setName}
+                  />
+                </View>
+
+                <View style={styles.inputWrap}>
+                  <Mail color="#6B7280" size={16} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="rider@renax.ng"
+                    placeholderTextColor="#3a5c47"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    value={email}
+                    onChangeText={setEmail}
+                  />
+                </View>
+
+                <View style={styles.inputWrap}>
+                  <Phone color="#6B7280" size={16} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="08012345678"
+                    placeholderTextColor="#3a5c47"
+                    keyboardType="phone-pad"
+                    value={phone}
+                    onChangeText={setPhone}
+                  />
+                </View>
+
+                <View style={styles.dualRow}>
+                  <View style={[styles.inputWrap, styles.half]}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="State"
+                      placeholderTextColor="#3a5c47"
+                      value={stateValue}
+                      onChangeText={setStateValue}
+                    />
+                  </View>
+                  <View style={[styles.inputWrap, styles.half]}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="City"
+                      placeholderTextColor="#3a5c47"
+                      value={city}
+                      onChangeText={setCity}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.inputWrap}>
+                  <Lock color="#6B7280" size={16} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor="#3a5c47"
+                    secureTextEntry
+                    value={password}
+                    onChangeText={setPassword}
+                  />
+                </View>
 
                 <Pressable
-                  style={[styles.bigBtn, otp.length < 4 && { opacity: 0.45 }]}
-                  onPress={verifyOtp}
-                  disabled={loading || otp.length < 4}
+                  style={[styles.bigBtn, loading && { opacity: 0.6 }]}
+                  onPress={signUp}
+                  disabled={loading}
                 >
-                  <Text style={styles.bigBtnText}>{loading ? 'Verifying...' : 'VERIFY & LOG IN'}</Text>
+                  <Text style={styles.bigBtnText}>{loading ? 'Creating...' : 'CREATE RIDER ACCOUNT'}</Text>
                   <ArrowRight color="#002B22" size={22} />
-                </Pressable>
-
-                <Pressable onPress={() => setStep('phone')} style={{ marginTop: 16, alignItems: 'center' }}>
-                  <Text style={styles.backText}>← Change phone number</Text>
                 </Pressable>
               </>
             )}
+
+            {message ? <Text style={styles.message}>{message}</Text> : null}
           </Animated.View>
 
-          {/* Footer trust */}
           <Animated.View entering={FadeInDown.duration(600).delay(500)} style={styles.trust}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Lock color="rgba(255,255,255,0.25)" size={12} strokeWidth={2} />
-            <Text style={styles.trustText}>Secure · Verified · RENAX Logistics v1.0</Text>
-          </View>
+            <Text style={styles.trustText}>Secure rider auth now uses Supabase sessions. Phone OTP login can come back once SMS is connected.</Text>
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -196,18 +307,42 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: 440,
     backgroundColor: 'rgba(4,20,13,0.92)',
     borderRadius: 24,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    padding: 36,
-    alignItems: 'center',
+    padding: 32,
+    alignItems: 'stretch',
     ...(Platform.OS === 'web' ? { backdropFilter: 'blur(20px)' } : {}),
   },
   cardCompact: {
     padding: 22,
     borderRadius: 18,
+  },
+  tabRow: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 24,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  tabActive: {
+    backgroundColor: '#ccfd3a',
+  },
+  tabText: {
+    fontFamily: 'Outfit_6',
+    color: 'rgba(255,255,255,0.7)',
+  },
+  tabTextActive: {
+    color: '#002B22',
   },
   cardTitle: {
     fontFamily: 'PlusJakartaSans_8',
@@ -222,84 +357,68 @@ const styles = StyleSheet.create({
     color: 'rgba(200,255,220,0.65)',
     textAlign: 'center',
     lineHeight: 24,
-    marginBottom: 28,
+    marginBottom: 24,
   },
-  phoneRow: {
+  inputWrap: {
     flexDirection: 'row',
-    width: '100%',
+    alignItems: 'center',
     gap: 10,
-    marginBottom: 20,
-  },
-  countryCode: {
+    width: '100%',
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     borderRadius: 12,
     paddingHorizontal: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 4,
+    marginBottom: 14,
   },
-  countryCodeText: {
-    fontFamily: 'Outfit_6',
-    fontSize: 15,
-    color: '#fff',
-  },
-  phoneInput: {
+  input: {
     flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
     color: '#fff',
     fontFamily: 'Outfit_4',
-    fontSize: 18,
-    letterSpacing: 2,
+    fontSize: 16,
+    paddingVertical: 14,
   },
-  otpInput: {
-    width: '100%',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(204,253,58,0.3)',
-    borderRadius: 16,
-    paddingVertical: 20,
-    color: '#ccfd3a',
-    fontFamily: 'PlusJakartaSans_8',
-    fontSize: 36,
-    letterSpacing: 12,
-    marginBottom: 20,
+  dualRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  half: {
+    flex: 1,
   },
   bigBtn: {
-    width: '100%',
-    backgroundColor: '#ccfd3a',
-    borderRadius: 14,
-    paddingVertical: 18,
+    marginTop: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+    backgroundColor: '#ccfd3a',
+    paddingVertical: 18,
+    borderRadius: 14,
   },
   bigBtnText: {
-    fontFamily: 'Outfit_7',
-    fontSize: 17,
+    fontFamily: 'PlusJakartaSans_6',
+    fontSize: 15,
     color: '#002B22',
     letterSpacing: 1,
   },
-  backText: {
-    fontFamily: 'Outfit_4',
-    fontSize: 14,
-    color: 'rgba(200,255,220,0.45)',
-    textDecorationLine: 'underline',
+  message: {
+    marginTop: 16,
+    textAlign: 'center',
+    fontFamily: 'Outfit_6',
+    fontSize: 13,
+    color: '#FCD34D',
+    lineHeight: 20,
   },
   trust: {
     alignItems: 'center',
+    maxWidth: 420,
   },
   trustText: {
     fontFamily: 'Outfit_4',
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.3)',
-    letterSpacing: 0.5,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.42)',
+    textAlign: 'center',
+    lineHeight: 18,
   },
 });
