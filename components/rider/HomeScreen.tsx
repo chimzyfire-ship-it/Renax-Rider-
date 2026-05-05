@@ -17,7 +17,7 @@ import {
 } from 'lucide-react-native';
 import { supabase } from '../../supabase';
 import { publishLocation, startLocationUpdates, stopLocationUpdates } from '../../utils/locationPublisher';
-import { logShipmentEvent, stageLabel } from '../../utils/routingService';
+import { stageLabel, updateShipmentStageWithProof } from '../../utils/routingService';
 
 const PulseRing = ({ isOnline }) => {
   const scale = useSharedValue(1);
@@ -49,7 +49,11 @@ const PulseRing = ({ isOnline }) => {
 type LiveJob = {
   id: string;
   tracking_id: string;
+  created_at?: string | null;
+  updated_at?: string | null;
   pickup_address: string;
+  pickup_lat?: number | null;
+  pickup_lon?: number | null;
   delivery_address: string;
   package_category: string;
   distance_km: number | null;
@@ -67,6 +71,26 @@ type LiveJob = {
   requires_cold_chain?: boolean | null;
 };
 
+const LIVE_JOB_WINDOW_MS = 2 * 60 * 1000;
+
+function isFreshLiveJob(job: LiveJob | null | undefined) {
+  const timestamp = job?.updated_at || job?.created_at;
+  if (!timestamp) return false;
+  const time = new Date(timestamp).getTime();
+  if (!Number.isFinite(time)) return false;
+  return Date.now() - time <= LIVE_JOB_WINDOW_MS;
+}
+
+function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const toRad = (value: number) => value * (Math.PI / 180);
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export default function HomeScreen({ rider, onAcceptJob }) {
   const [isOnline, setIsOnline] = useState(false);
   const [showJobAlert, setShowJobAlert] = useState(false);
@@ -75,6 +99,51 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   const riderState = rider?.state || 'Lagos';
   const timerRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
+  const refreshRef = useRef<any>(null);
+
+  const fetchEligibleJobs = async () => {
+    const recentCutoff = new Date(Date.now() - LIVE_JOB_WINDOW_MS).toISOString();
+    const { data } = await supabase
+      .from('shipments')
+      .select('*')
+      .eq('pickup_state', riderState)
+      .eq('dispatch_stage', 'awaiting_rider_acceptance')
+      .gte('updated_at', recentCutoff)
+      .order('created_at', { ascending: false })
+      .limit(25);
+
+    if (!data?.length || showJobAlert) return;
+    const freshJobs = data.filter((job: LiveJob) => isFreshLiveJob(job));
+    if (!freshJobs.length) return;
+
+    let chosenJob = freshJobs[0] as LiveJob;
+
+    try {
+      const pos = await (await import('expo-location')).getCurrentPositionAsync({ accuracy: (await import('expo-location')).Accuracy.Balanced });
+      const riderLat = pos?.coords?.latitude;
+      const riderLon = pos?.coords?.longitude;
+
+      if (typeof riderLat === 'number' && typeof riderLon === 'number') {
+        chosenJob = [...freshJobs].sort((a: LiveJob, b: LiveJob) => {
+          const distA =
+            typeof a.pickup_lat === 'number' && typeof a.pickup_lon === 'number'
+              ? distanceKm(riderLat, riderLon, a.pickup_lat, a.pickup_lon)
+              : Number.POSITIVE_INFINITY;
+          const distB =
+            typeof b.pickup_lat === 'number' && typeof b.pickup_lon === 'number'
+              ? distanceKm(riderLat, riderLon, b.pickup_lat, b.pickup_lon)
+              : Number.POSITIVE_INFINITY;
+          return distA - distB;
+        })[0] as LiveJob;
+      }
+    } catch {
+      // Fall back to freshest job if location is unavailable.
+    }
+
+    setCurrentJob(chosenJob);
+    setShowJobAlert(true);
+    setJobTimer(60);
+  };
 
   // ── Live stats from Supabase ──────────────────────────────────────────────
   const [activeJobs, setActiveJobs] = useState<number | null>(null);
@@ -118,8 +187,11 @@ export default function HomeScreen({ rider, onAcceptJob }) {
 
   // ── Subscribe to new jobs when rider goes online ──────────────────────────
   useEffect(() => {
-    let sub: any = null;
     if (isOnline) {
+      fetchEligibleJobs();
+      refreshRef.current = setInterval(() => {
+        fetchEligibleJobs();
+      }, 1500);
       channelRef.current = supabase
         .channel(`new-rider-jobs-${riderState}`)
         .on('postgres_changes', {
@@ -130,12 +202,11 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         }, (payload: any) => {
           const job = (payload.new || payload.record) as LiveJob;
           if (!job) return;
+          if (!isFreshLiveJob(job)) return;
           const isRelayFinalMile = job.dispatch_stage === 'awaiting_final_mile_rider' && job.delivery_state === riderState;
           const isEligibleAwaitingAccept = job.dispatch_stage === 'awaiting_rider_acceptance' && job.pickup_state === riderState;
           if (!isRelayFinalMile && !isEligibleAwaitingAccept) return;
-          setCurrentJob(job);
-          setShowJobAlert(true);
-          setJobTimer(60);
+          fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);
         })
         .on('postgres_changes', {
@@ -145,28 +216,30 @@ export default function HomeScreen({ rider, onAcceptJob }) {
           filter: "dispatch_stage=eq.awaiting_final_mile_rider",
         }, (payload: any) => {
           const job = (payload.new || payload.record) as LiveJob;
+          if (!isFreshLiveJob(job)) return;
           if (!job || job.delivery_state !== riderState) return;
-          setCurrentJob(job);
-          setShowJobAlert(true);
-          setJobTimer(60);
+          fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);
         })
         .subscribe();
     } else {
+      clearInterval(refreshRef.current);
       channelRef.current?.unsubscribe();
       channelRef.current = null;
       setShowJobAlert(false);
       setCurrentJob(null);
     }
-    return () => { channelRef.current?.unsubscribe(); };
-  }, [isOnline, riderState]);
+    return () => {
+      clearInterval(refreshRef.current);
+      channelRef.current?.unsubscribe();
+    };
+  }, [isOnline, riderState, showJobAlert]);
 
   // Start/stop publishing location when going online/offline
   useEffect(() => {
-    let watcher: any = null;
     const start = async () => {
       if (!rider?.id) return;
-      watcher = await startLocationUpdates(rider.id, { timeInterval: 10000, distanceInterval: 20 });
+      await startLocationUpdates(rider.id, { timeInterval: 10000, distanceInterval: 20 });
       // send immediate location ping
       try {
         const pos = await (await import('expo-location')).getCurrentPositionAsync({ accuracy: (await import('expo-location')).Accuracy.Balanced });
@@ -178,13 +251,40 @@ export default function HomeScreen({ rider, onAcceptJob }) {
             speed: pos.coords.speed ?? null,
             accuracy: pos.coords.accuracy ?? null,
             is_online: true,
+            metadata: {
+              state: rider?.state || riderState,
+              city: rider?.city || '',
+              vehicle: rider?.vehicle || '',
+            },
           });
         }
-      } catch (e) { /* ignore */ }
+      } catch {
+        await publishLocation(rider.id, {
+          lat: 0,
+          lng: 0,
+          is_online: true,
+          metadata: {
+            state: rider?.state || riderState,
+            city: rider?.city || '',
+            vehicle: rider?.vehicle || '',
+          },
+        });
+      }
     };
     const stop = async () => {
       stopLocationUpdates();
-      if (rider?.id) await publishLocation(rider.id, { lat: 0, lng: 0, is_online: false });
+      if (rider?.id) {
+        await publishLocation(rider.id, {
+          lat: 0,
+          lng: 0,
+          is_online: false,
+          metadata: {
+            state: rider?.state || riderState,
+            city: rider?.city || '',
+            vehicle: rider?.vehicle || '',
+          },
+        });
+      }
     };
 
     if (isOnline) start(); else stop();
@@ -225,17 +325,30 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       updatePayload.status = 'Out for Delivery';
     }
 
-    await supabase.from('shipments').update(updatePayload).eq('id', currentJob.id);
-    await logShipmentEvent(
-      currentJob.id,
-      updatePayload.dispatch_stage,
-      riderState,
-      rider?.id,
-      'rider',
-      currentJob.routing_mode === 'relay_terminal'
+    await updateShipmentStageWithProof({
+      shipmentId: currentJob.id,
+      stage: updatePayload.dispatch_stage,
+      routingMode: currentJob.routing_mode || 'last_mile_local',
+      actorId: rider?.id,
+      actorRole: 'rider',
+      locationName: riderState,
+      notes: currentJob.routing_mode === 'relay_terminal'
         ? 'Rider accepted relay handoff task.'
-        : 'Rider accepted delivery task.'
-    );
+        : 'Rider accepted delivery task.',
+      shipmentPatch: {
+        assigned_rider_id: updatePayload.assigned_rider_id,
+        final_mile_rider_id: updatePayload.final_mile_rider_id,
+        status: updatePayload.status,
+      },
+      proofs: [
+        {
+          stage: updatePayload.dispatch_stage,
+          proof_type: 'rider_acceptance',
+          notes: 'Rider actively accepted the shipment assignment.',
+          confidence_score: 0.78,
+        },
+      ],
+    });
     // publish current_shipment_id to rider_locations so Admin can correlate
     try {
       if (rider?.id) {
@@ -245,9 +358,14 @@ export default function HomeScreen({ rider, onAcceptJob }) {
           lng: pos?.coords?.longitude ?? 0,
           is_online: true,
           current_shipment_id: currentJob.id,
+          metadata: {
+            state: rider?.state || riderState,
+            city: rider?.city || '',
+            vehicle: rider?.vehicle || '',
+          },
         });
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     onAcceptJob(currentJob);
     setCurrentJob(null);
   };
