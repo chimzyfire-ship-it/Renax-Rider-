@@ -260,9 +260,10 @@ export async function publishLocation(riderId: string, payload: {
 // Web-only: browser Geolocation API wrapper (no expo-location needed on web)
 let _watchTimerId: ReturnType<typeof setInterval> | null = null;
 
-export function startLocationUpdates(riderId: string, options?: { timeInterval?: number }) {
+export function startLocationUpdates(riderId: string, options?: { timeInterval?: number; distanceInterval?: number }) {
   if (!riderId || typeof navigator === 'undefined' || !navigator.geolocation) return null;
   const interval = options?.timeInterval ?? 10_000;
+  stopLocationUpdates();
   _watchTimerId = setInterval(() => {
     navigator.geolocation.getCurrentPosition(async (pos) => {
       await publishLocation(riderId, {
