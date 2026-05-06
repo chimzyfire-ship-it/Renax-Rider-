@@ -499,15 +499,15 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
       patch.final_mile_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
-      patch.status = 'Out for Delivery';
+      patch.status = 'in_progress';
     } else if (jobSnapshot.routing_mode === 'relay_terminal') {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'awaiting_source_terminal';
-      patch.status = 'En Route to Source Hub';
+      patch.status = 'in_progress';
     } else {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
-      patch.status = 'Out for Delivery';
+      patch.status = 'in_progress';
     }
 
     // ── ALWAYS navigate to Active Job — never re-pop the modal ────────────
