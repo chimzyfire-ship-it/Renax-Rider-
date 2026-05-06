@@ -488,28 +488,54 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       isAcceptingRef.current = false;
       return;
     }
-    const updatePayload: Record<string, any> = {
+
+    const nowIso = new Date().toISOString();
+    const patch: Record<string, any> = {
       status: 'Rider Assigned',
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso,
     };
 
     if (currentJob.dispatch_stage === 'awaiting_final_mile_rider') {
-      updatePayload.final_mile_rider_id = rider?.id || null;
-      updatePayload.dispatch_stage = 'out_for_delivery';
-      updatePayload.status = 'Out for Delivery';
+      patch.final_mile_rider_id = rider?.id || null;
+      patch.dispatch_stage = 'out_for_delivery';
+      patch.status = 'Out for Delivery';
     } else if (currentJob.routing_mode === 'relay_terminal') {
-      updatePayload.assigned_rider_id = rider?.id || null;
-      updatePayload.dispatch_stage = 'awaiting_source_terminal';
+      patch.assigned_rider_id = rider?.id || null;
+      patch.dispatch_stage = 'awaiting_source_terminal';
     } else {
-      updatePayload.assigned_rider_id = rider?.id || null;
-      updatePayload.dispatch_stage = 'out_for_delivery';
-      updatePayload.status = 'Out for Delivery';
+      patch.assigned_rider_id = rider?.id || null;
+      patch.dispatch_stage = 'out_for_delivery';
+      patch.status = 'Out for Delivery';
     }
 
+    // ── CRITICAL PATH: direct shipment update ──────────────────────────────
+    // This is the only call that MUST succeed for acceptance to work.
+    // We do NOT use updateShipmentStageWithProof here because it also writes
+    // to shipment_events and shipment_stage_proofs — if those tables are
+    // missing in production the entire acceptance silently fails and the
+    // modal re-pops in a loop.
+    try {
+      const { error } = await supabase
+        .from('shipments')
+        .update(patch)
+        .eq('id', currentJob.id);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Unable to accept rider job (shipment update failed)', error);
+      isAcceptingRef.current = false;
+      setShowJobAlert(true);
+      setJobTimer(60);
+      return;
+    }
+
+    // ── NON-CRITICAL: fire-and-forget event logging & proof recording ──────
+    // These are nice-to-have audit trails. If they fail (missing tables,
+    // RLS, network) the rider still gets the job.
     try {
       await updateShipmentStageWithProof({
         shipmentId: currentJob.id,
-        stage: updatePayload.dispatch_stage,
+        stage: patch.dispatch_stage,
         routingMode: currentJob.routing_mode || 'last_mile_local',
         actorId: rider?.id,
         actorRole: 'rider',
@@ -517,27 +543,21 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         notes: currentJob.routing_mode === 'relay_terminal'
           ? 'Rider accepted relay handoff task.'
           : 'Rider accepted delivery task.',
-        shipmentPatch: {
-          assigned_rider_id: updatePayload.assigned_rider_id,
-          final_mile_rider_id: updatePayload.final_mile_rider_id,
-          status: updatePayload.status,
-        },
+        shipmentPatch: {},  // already applied above — no second write
         proofs: [
           {
-            stage: updatePayload.dispatch_stage,
+            stage: patch.dispatch_stage,
             proof_type: 'rider_acceptance',
             notes: 'Rider actively accepted the shipment assignment.',
             confidence_score: 0.78,
           },
         ],
       });
-    } catch (error) {
-      console.error('Unable to accept rider job', error);
-      isAcceptingRef.current = false;
-      setShowJobAlert(true);
-      setJobTimer(60);
-      return;
+    } catch (auditError) {
+      // Non-fatal — the shipment was already updated above.
+      console.warn('Audit trail write failed (non-fatal)', auditError);
     }
+
     // publish current_shipment_id to rider_locations so Admin can correlate
     try {
       if (rider?.id) {
@@ -555,6 +575,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         });
       }
     } catch { /* ignore */ }
+
     // Release the accepting lock BEFORE navigating away so the home screen
     // can respond to future jobs normally.
     isAcceptingRef.current = false;
