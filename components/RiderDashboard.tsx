@@ -21,6 +21,8 @@ const TABS = [
   { key: 'help',    Icon: HelpCircle,    label: 'Help' },
 ];
 
+const dashboardStateKey = (riderId?: string | null) => `renax:rider-dashboard:${riderId || 'demo'}`;
+
 export default function RiderDashboard({ rider, onLogout }) {
   const { width } = useWindowDimensions();
   const isWebWide = Platform.OS === 'web' && width >= 768;
@@ -62,6 +64,40 @@ export default function RiderDashboard({ rider, onLogout }) {
 
     loadPersistedProfile();
   }, [defaultProfile, rider?.id]);
+
+  useEffect(() => {
+    const loadDashboardState = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(dashboardStateKey(rider?.id));
+        if (!stored) return;
+        const parsed = JSON.parse(stored);
+        if (parsed?.activeTab) setActiveTab(parsed.activeTab);
+        if (parsed?.activeJob) setActiveJob(parsed.activeJob);
+      } catch (error) {
+        console.error('Failed to restore rider dashboard state', error);
+      }
+    };
+
+    loadDashboardState();
+  }, [rider?.id]);
+
+  useEffect(() => {
+    const persistDashboardState = async () => {
+      try {
+        await AsyncStorage.setItem(
+          dashboardStateKey(rider?.id),
+          JSON.stringify({
+            activeTab,
+            activeJob,
+          }),
+        );
+      } catch (error) {
+        console.error('Failed to persist rider dashboard state', error);
+      }
+    };
+
+    persistDashboardState();
+  }, [activeJob, activeTab, rider?.id]);
 
   const persistProfile = async (updates: any) => {
     const nextProfile = { ...riderProfile, ...updates };
