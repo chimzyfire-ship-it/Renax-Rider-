@@ -18,7 +18,7 @@ import {
 } from 'lucide-react-native';
 import { supabase } from '../../supabase';
 import { publishLocation, startLocationUpdates, stopLocationUpdates } from '../../utils/locationPublisher';
-import { stageLabel, updateShipmentStageWithProof } from '../../utils/routingService';
+import { shipmentStatusFromStage, stageLabel } from '../../utils/routingService';
 
 const PulseRing = ({ isOnline }) => {
   const scale = useSharedValue(1);
@@ -73,7 +73,9 @@ type LiveJob = {
 };
 
 const LIVE_JOB_WINDOW_MS = 2 * 60 * 1000;
+const DECLINED_JOB_TTL_MS = 30 * 60 * 1000;
 const onlineStorageKey = (riderId?: string | null) => `renax:rider-online:${riderId || 'unknown'}`;
+const declinedJobsStorageKey = (riderId?: string | null) => `renax:rider-declined:${riderId || 'unknown'}`;
 const readOnlinePreference = (riderId?: string | null) => {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
@@ -110,7 +112,26 @@ function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export default function HomeScreen({ rider, onAcceptJob }) {
+async function readDeclinedJobs(riderId?: string | null) {
+  try {
+    const raw = await AsyncStorage.getItem(declinedJobsStorageKey(riderId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeDeclinedJobs(riderId: string | null | undefined, nextValue: Record<string, number>) {
+  try {
+    await AsyncStorage.setItem(declinedJobsStorageKey(riderId), JSON.stringify(nextValue));
+  } catch {
+    // Ignore local persistence failures.
+  }
+}
+
+export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
   const [isOnline, setIsOnline] = useState(false);
   const [presenceReady, setPresenceReady] = useState(false);
   const [showJobAlert, setShowJobAlert] = useState(false);
@@ -123,6 +144,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   const isOnlineRef = useRef(false);
   const showJobAlertRef = useRef(false);
   const isAcceptingRef = useRef(false);
+  const busyShipmentId = activeJob?.id || null;
 
   const publishOnlinePing = async (currentShipmentId?: string | null) => {
     if (!rider?.id) return;
@@ -143,7 +165,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
             speed: pos.coords.speed,
             accuracy: pos.coords.accuracy,
             is_online: true,
-            current_shipment_id: currentShipmentId ?? undefined,
+            current_shipment_id: currentShipmentId ?? busyShipmentId ?? undefined,
             metadata,
           });
         }, async () => {
@@ -151,7 +173,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
             lat: 0,
             lng: 0,
             is_online: true,
-            current_shipment_id: currentShipmentId ?? undefined,
+            current_shipment_id: currentShipmentId ?? busyShipmentId ?? undefined,
             metadata,
           });
         }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 });
@@ -166,7 +188,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         speed: pos?.coords?.speed ?? null,
         accuracy: pos?.coords?.accuracy ?? null,
         is_online: true,
-        current_shipment_id: currentShipmentId ?? undefined,
+        current_shipment_id: currentShipmentId ?? busyShipmentId ?? undefined,
         metadata,
       });
     } catch {
@@ -174,7 +196,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         lat: 0,
         lng: 0,
         is_online: true,
-        current_shipment_id: currentShipmentId ?? undefined,
+        current_shipment_id: currentShipmentId ?? busyShipmentId ?? undefined,
         metadata,
       });
     }
@@ -273,6 +295,12 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   }, [rider?.id]);
 
   const fetchEligibleJobs = async () => {
+    if (busyShipmentId) {
+      setShowJobAlert(false);
+      setCurrentJob(null);
+      return;
+    }
+
     const recentCutoff = new Date(Date.now() - LIVE_JOB_WINDOW_MS).toISOString();
     const [pickupJobs, finalMileJobs] = await Promise.all([
       supabase
@@ -302,7 +330,13 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     const data = [...(pickupJobs.data || []), ...(finalMileJobs.data || [])];
 
     if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
-    const freshJobs = data.filter((job: LiveJob) => isFreshLiveJob(job));
+    const declinedJobs = await readDeclinedJobs(rider?.id);
+    const now = Date.now();
+    const freshJobs = data.filter((job: LiveJob) => {
+      if (!isFreshLiveJob(job)) return false;
+      const declinedAt = Number(declinedJobs?.[job.id] || 0);
+      return !declinedAt || now - declinedAt > DECLINED_JOB_TTL_MS;
+    });
     if (!freshJobs.length) return;
 
     let chosenJob = freshJobs[0] as LiveJob;
@@ -380,6 +414,13 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     showJobAlertRef.current = showJobAlert;
   }, [showJobAlert]);
 
+  useEffect(() => {
+    if (!busyShipmentId) return;
+    clearInterval(timerRef.current);
+    setShowJobAlert(false);
+    setCurrentJob(null);
+  }, [busyShipmentId]);
+
   // ── Subscribe to new jobs when rider goes online ──────────────────────────
   // NOTE: showJobAlert intentionally removed from deps — changes to it must NOT
   // re-run this effect, because that would call fetchEligibleJobs() before the
@@ -432,7 +473,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       channelRef.current?.unsubscribe();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, riderState]);
+  }, [isOnline, riderState, busyShipmentId]);
 
   // Start/stop publishing location when going online/offline
   useEffect(() => {
@@ -452,7 +493,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
 
     const handleVisible = () => {
       if (document.visibilityState === 'visible' && isOnlineRef.current) {
-        publishOnlinePing();
+        publishOnlinePing(busyShipmentId);
         fetchEligibleJobs();
       }
     };
@@ -464,7 +505,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       document.removeEventListener('visibilitychange', handleVisible);
       window.removeEventListener('focus', handleVisible);
     };
-  }, [rider?.id, riderState]);
+  }, [rider?.id, riderState, busyShipmentId]);
 
   useEffect(() => {
     if (showJobAlert) {
@@ -499,15 +540,15 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
       patch.final_mile_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
-      patch.status = 'in_progress';
+      patch.status = shipmentStatusFromStage('out_for_delivery', jobSnapshot.routing_mode || 'last_mile_local');
     } else if (jobSnapshot.routing_mode === 'relay_terminal') {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'awaiting_source_terminal';
-      patch.status = 'in_progress';
+      patch.status = shipmentStatusFromStage('awaiting_source_terminal', jobSnapshot.routing_mode || 'relay_terminal');
     } else {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
-      patch.status = 'in_progress';
+      patch.status = shipmentStatusFromStage('out_for_delivery', jobSnapshot.routing_mode || 'last_mile_local');
     }
 
     try {
@@ -565,8 +606,30 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   const handleDecline = () => {
     clearInterval(timerRef.current);
     setShowJobAlert(false);
-    setCurrentJob(null);
     setJobTimer(60);
+    const declinedJob = currentJob;
+    setCurrentJob(null);
+    if (!declinedJob) return;
+
+    void (async () => {
+      const declinedJobs = await readDeclinedJobs(rider?.id);
+      await writeDeclinedJobs(rider?.id, {
+        ...declinedJobs,
+        [declinedJob.id]: Date.now(),
+      });
+      try {
+        await supabase.from('shipment_events').insert({
+          shipment_id: declinedJob.id,
+          stage: declinedJob.dispatch_stage || 'awaiting_rider_acceptance',
+          location_name: riderState,
+          actor_id: rider?.id || null,
+          actor_role: 'rider',
+          notes: 'Rider declined delivery task.',
+        });
+      } catch (error) {
+        console.error('Unable to log rider decline event', error);
+      }
+    })();
   };
 
   if (!fontsLoaded) return null;

@@ -9,11 +9,12 @@ import { Navigation, CheckCircle2, Package, MapPin, Inbox, ShieldCheck, Camera a
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { publishLocation } from '../../utils/locationPublisher';
-import { recordShipmentQrScanFailure, stageLabel, updateShipmentStageWithProof, verifyShipmentStageSecure } from '../../utils/routingService';
+import { recordShipmentQrScanFailure, shipmentStatusFromStage, stageLabel, updateShipmentStageWithProof, verifyShipmentStageSecure } from '../../utils/routingService';
 import { parseRenaxQrPayload, uploadShipmentProofPhoto } from '../../utils/proofMedia';
 import { enqueue, registerDrainWorker, queueSize } from '../../utils/offlineQueue';
+import { supabase } from '../../supabase';
 
-export default function ActiveJobScreen({ job, rider, onJobComplete }) {
+export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancelled }) {
   const [phase, setPhase] = useState<'pickup' | 'deliver' | 'done'>('pickup');
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpValue, setOtpValue] = useState('');
@@ -32,6 +33,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete }) {
   const [mismatchCount, setMismatchCount] = useState(0);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [pendingQueueSize, setPendingQueueSize] = useState(queueSize());
+  const [cancelling, setCancelling] = useState(false);
   // Signature capture
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
@@ -356,6 +358,74 @@ export default function ActiveJobScreen({ job, rider, onJobComplete }) {
     }
   };
 
+  const cancelAssignedJob = async () => {
+    if (!job?.id || cancelling || phase !== 'pickup') return;
+
+    const isFinalMileAssignment = job?.routing_mode === 'relay_terminal' && job?.final_mile_rider_id === rider?.id;
+    const releaseStage = isFinalMileAssignment ? 'awaiting_final_mile_rider' : 'awaiting_rider_acceptance';
+    const releasePatch: Record<string, any> = {
+      dispatch_stage: releaseStage,
+      status: shipmentStatusFromStage(releaseStage, job?.routing_mode || 'last_mile_local'),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (isFinalMileAssignment) {
+      releasePatch.final_mile_rider_id = null;
+    } else {
+      releasePatch.assigned_rider_id = null;
+    }
+
+    setCancelling(true);
+    setOtpError('');
+
+    try {
+      const { data, error } = await supabase
+        .from('shipments')
+        .update(releasePatch)
+        .eq('id', job.id)
+        .select('id')
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) throw new Error('Could not release this job back to the queue.');
+
+      try {
+        await supabase.from('shipment_events').insert({
+          shipment_id: job.id,
+          stage: releaseStage,
+          location_name: rider?.state || 'Route',
+          actor_id: rider?.id || null,
+          actor_role: 'rider',
+          notes: 'Rider cancelled accepted job before pickup confirmation.',
+        });
+      } catch (eventError) {
+        console.error('Unable to log rider cancellation event', eventError);
+      }
+
+      try {
+        if (rider?.id) {
+          await publishLocation(rider.id, {
+            lat: 0,
+            lng: 0,
+            is_online: true,
+            current_shipment_id: null,
+          });
+        }
+      } catch {
+        // Ignore location release failures.
+      }
+
+      onJobCancelled?.();
+    } catch (error: any) {
+      setOtpError(error?.message || 'Could not cancel this job right now.');
+      if (Platform.OS === 'web') {
+        alert(`[RENAX DEBUG] Job cancellation failed:\n${error?.message || String(error)}\n\nCode: ${error?.code || 'none'}\nDetails: ${error?.details || 'none'}\nHint: ${error?.hint || 'none'}\n\nShipment ID: ${job.id}\nRider ID: ${rider?.id || 'none'}\nPatch: ${JSON.stringify(releasePatch)}`);
+      }
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const beginConfirmation = () => {
     setOtpError('');
     if (phase === 'pickup' && isRelayToSourceTerminal) {
@@ -644,6 +714,11 @@ export default function ActiveJobScreen({ job, rider, onJobComplete }) {
               <Text style={styles.confirmBtnText}>I HAVE DELIVERED IT</Text>
             </Pressable>
           )}
+          {phase === 'pickup' && (
+            <Pressable style={[styles.cancelBtn, cancelling && { opacity: 0.6 }]} onPress={cancelAssignedJob} disabled={cancelling}>
+              <Text style={styles.cancelBtnText}>{cancelling ? 'CANCELLING...' : 'CANCEL JOB'}</Text>
+            </Pressable>
+          )}
           <Text style={styles.confirmHint}>
             {phase === 'pickup'
               ? (isRelayToSourceTerminal ? 'Only tap this after terminal staff receives the package.' : 'Pickup now requires the sender OTP before the milestone is trusted.')
@@ -858,6 +933,8 @@ const styles = StyleSheet.create({
   packageText: { fontFamily: 'Outfit_4', fontSize: 13, color: 'rgba(200,255,220,0.6)' },
   confirmBtn: { backgroundColor: '#F59E0B', borderRadius: 18, paddingVertical: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 14 },
   confirmBtnText: { fontFamily: 'Outfit_7', fontSize: 17, color: '#002B22', letterSpacing: 1 },
+  cancelBtn: { borderRadius: 16, paddingVertical: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(239,68,68,0.35)', backgroundColor: 'rgba(239,68,68,0.08)', marginBottom: 14 },
+  cancelBtnText: { fontFamily: 'Outfit_7', fontSize: 14, color: '#FCA5A5', letterSpacing: 1 },
   confirmHint: { fontFamily: 'Outfit_4', fontSize: 13, color: 'rgba(200,255,220,0.38)', textAlign: 'center', lineHeight: 20 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(2,15,9,0.82)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   modalCard: { width: '100%', maxWidth: 420, backgroundColor: '#041910', borderRadius: 24, borderWidth: 1, borderColor: 'rgba(204,253,58,0.16)', padding: 24 },
