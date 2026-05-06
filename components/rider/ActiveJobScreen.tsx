@@ -47,6 +47,11 @@ export default function ActiveJobScreen({ job, rider, onJobComplete }) {
     Outfit_7: Outfit_700Bold,
   });
 
+  const otpPlaceholder =
+    phase === 'pickup'
+      ? 'Enter pickup verification code'
+      : 'Enter delivery verification code';
+
   // Network status listener
   useEffect(() => {
     const onOnline  = () => { setIsOnline(true);  setPendingQueueSize(queueSize()); };
@@ -679,7 +684,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete }) {
               value={otpValue}
               onChangeText={setOtpValue}
               keyboardType="number-pad"
-              placeholder={requiredOtp ? `Expected ${String(requiredOtp).length}-digit code` : 'Enter verification code'}
+              placeholder={otpPlaceholder}
               placeholderTextColor="rgba(255,255,255,0.35)"
               editable={!submitting}
             />
