@@ -121,6 +121,8 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   const channelRef = useRef<any>(null);
   const refreshRef = useRef<any>(null);
   const isOnlineRef = useRef(false);
+  const showJobAlertRef = useRef(false);
+  const isAcceptingRef = useRef(false);
 
   const publishOnlinePing = async (currentShipmentId?: string | null) => {
     if (!rider?.id) return;
@@ -299,7 +301,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
 
     const data = [...(pickupJobs.data || []), ...(finalMileJobs.data || [])];
 
-    if (!data?.length || showJobAlert) return;
+    if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const freshJobs = data.filter((job: LiveJob) => isFreshLiveJob(job));
     if (!freshJobs.length) return;
 
@@ -372,7 +374,16 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     Outfit_7: Outfit_700Bold,
   });
 
+  // ── Sync showJobAlert into a ref so fetchEligibleJobs always reads latest value
+  // even when called from within a stale effect closure. ─────────────────────
+  useEffect(() => {
+    showJobAlertRef.current = showJobAlert;
+  }, [showJobAlert]);
+
   // ── Subscribe to new jobs when rider goes online ──────────────────────────
+  // NOTE: showJobAlert intentionally removed from deps — changes to it must NOT
+  // re-run this effect, because that would call fetchEligibleJobs() before the
+  // DB write from handleAccept completes, causing the modal to re-pop. ───────
   useEffect(() => {
     if (isOnline) {
       fetchEligibleJobs();
@@ -420,7 +431,8 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       clearInterval(refreshRef.current);
       channelRef.current?.unsubscribe();
     };
-  }, [isOnline, riderState, showJobAlert]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, riderState]);
 
   // Start/stop publishing location when going online/offline
   useEffect(() => {
@@ -467,9 +479,15 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   }, [showJobAlert]);
 
   const handleAccept = async () => {
+    // Guard: prevent double-tap and re-entry while a previous acceptance is in flight.
+    if (isAcceptingRef.current) return;
+    isAcceptingRef.current = true;
     clearInterval(timerRef.current);
     setShowJobAlert(false);
-    if (!currentJob) return;
+    if (!currentJob) {
+      isAcceptingRef.current = false;
+      return;
+    }
     const updatePayload: Record<string, any> = {
       status: 'Rider Assigned',
       updated_at: new Date().toISOString(),
@@ -515,6 +533,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       });
     } catch (error) {
       console.error('Unable to accept rider job', error);
+      isAcceptingRef.current = false;
       setShowJobAlert(true);
       setJobTimer(60);
       return;
@@ -536,6 +555,9 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         });
       }
     } catch { /* ignore */ }
+    // Release the accepting lock BEFORE navigating away so the home screen
+    // can respond to future jobs normally.
+    isAcceptingRef.current = false;
     onAcceptJob(currentJob);
     setCurrentJob(null);
   };
