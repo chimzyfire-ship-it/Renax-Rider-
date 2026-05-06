@@ -510,34 +510,36 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       patch.status = 'in_progress';
     }
 
-    // ── ALWAYS navigate to Active Job — never re-pop the modal ────────────
-    // The DB update runs in the background. If it fails, the rider still
-    // proceeds and can retry from the Active Job screen.
-    isAcceptingRef.current = false;
-    onAcceptJob(jobSnapshot);
-    setCurrentJob(null);
-
-    // ── Background: attempt the DB update ─────────────────────────────────
     try {
-      // Refresh JWT first (best-effort)
       try { await supabase.auth.refreshSession(); } catch {}
 
-      const { error } = await supabase
+      const { data: updatedShipment, error } = await supabase
         .from('shipments')
         .update(patch)
-        .eq('id', jobSnapshot.id);
+        .eq('id', jobSnapshot.id)
+        .select('id, dispatch_stage, assigned_rider_id, final_mile_rider_id, status, updated_at')
+        .maybeSingle();
 
       if (error) {
-        console.error('[RENAX] Shipment acceptance DB write failed:', error);
-        if (Platform.OS === 'web') {
-          alert(`[RENAX DEBUG] Shipment update error:\n${error.message}\n\nCode: ${error.code}\nDetails: ${error.details || 'none'}\nHint: ${error.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id}`);
-        }
+        throw error;
       }
+      if (!updatedShipment) {
+        throw new Error('Could not confirm this job assignment. Please try again.');
+      }
+
+      onAcceptJob({ ...jobSnapshot, ...patch, ...updatedShipment });
+      setCurrentJob(null);
+      isAcceptingRef.current = false;
     } catch (err: any) {
-      console.error('[RENAX] Acceptance update threw:', err);
+      console.error('[RENAX] Shipment acceptance failed:', err);
+      setCurrentJob(jobSnapshot);
+      setShowJobAlert(true);
+      setJobTimer(60);
+      isAcceptingRef.current = false;
       if (Platform.OS === 'web') {
-        alert(`[RENAX DEBUG] Acceptance threw:\n${err?.message || String(err)}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id}`);
+        alert(`[RENAX DEBUG] Job acceptance failed:\n${err?.message || String(err)}\n\nCode: ${err?.code || 'none'}\nDetails: ${err?.details || 'none'}\nHint: ${err?.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id || 'none'}\nPatch: ${JSON.stringify(patch)}`);
       }
+      return;
     }
 
     // ── Background: fire-and-forget event log & location ──────────────────
