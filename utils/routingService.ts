@@ -505,10 +505,12 @@ export async function updateShipmentStageWithProof(params: {
     patch.pickup_verified_at = nowIso;
   }
 
-  await supabase
+  const { error } = await supabase
     .from('shipments')
     .update(patch)
     .eq('id', shipmentId);
+
+  if (error) throw error;
 
   const proofNote = proofSummary ? `${notes || 'Shipment update recorded.'} Proofs: ${proofSummary}.` : notes;
   await logShipmentEvent(shipmentId, stage, locationName, actorId, actorRole, proofNote);

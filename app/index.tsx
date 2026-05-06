@@ -17,6 +17,63 @@ export default function RootIndex() {
   const [rider, setRider] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  const ensureRiderProfile = async (nextSession: any) => {
+    const userId = nextSession?.user?.id;
+    if (!userId) return null;
+
+    const defaultName = nextSession.user.email?.split('@')[0] || 'Rider';
+    const defaultProfile = {
+      id: userId,
+      email: nextSession.user.email || null,
+      role: 'driver',
+      full_name: defaultName,
+      phone_number: null,
+      state: 'Lagos',
+      city: 'Ikeja',
+    };
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, phone_number, state, city, role')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!data) {
+      const { data: created, error: createError } = await supabase
+        .from('profiles')
+        .upsert(defaultProfile)
+        .select('id, email, full_name, phone_number, state, city, role')
+        .single();
+
+      if (createError) throw createError;
+      return created;
+    }
+
+    const needsRepair = !data.role || !data.state || !data.city;
+    if (!needsRepair) return data;
+
+    const repairedProfile = {
+      id: userId,
+      email: data.email || nextSession.user.email || null,
+      role: data.role || 'driver',
+      full_name: data.full_name || defaultName,
+      phone_number: data.phone_number || null,
+      state: data.state || 'Lagos',
+      city: data.city || 'Ikeja',
+    };
+
+    const { data: repaired, error: repairError } = await supabase
+      .from('profiles')
+      .upsert(repairedProfile)
+      .select('id, email, full_name, phone_number, state, city, role')
+      .single();
+
+    if (repairError) throw repairError;
+    return repaired;
+  };
+
   const hydrateRider = async (nextSession: any) => {
     if (!nextSession?.user?.id) {
       setRider(null);
@@ -25,13 +82,7 @@ export default function RootIndex() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, phone_number, state, city, role')
-        .eq('id', nextSession.user.id)
-        .maybeSingle();
-
-      if (error) throw error;
+      const data = await ensureRiderProfile(nextSession);
 
       setRider({
         id: nextSession.user.id,
