@@ -74,6 +74,23 @@ type LiveJob = {
 
 const LIVE_JOB_WINDOW_MS = 2 * 60 * 1000;
 const onlineStorageKey = (riderId?: string | null) => `renax:rider-online:${riderId || 'unknown'}`;
+const readOnlinePreference = (riderId?: string | null) => {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  try {
+    return window.localStorage.getItem(onlineStorageKey(riderId));
+  } catch {
+    return null;
+  }
+};
+
+const writeOnlinePreference = (riderId: string | null | undefined, value: 'true' | 'false') => {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(onlineStorageKey(riderId), value);
+  } catch {
+    // Ignore localStorage write failures on locked-down browsers.
+  }
+};
 
 function isFreshLiveJob(job: LiveJob | null | undefined) {
   const timestamp = job?.updated_at || job?.created_at;
@@ -95,6 +112,7 @@ function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
 
 export default function HomeScreen({ rider, onAcceptJob }) {
   const [isOnline, setIsOnline] = useState(false);
+  const [presenceReady, setPresenceReady] = useState(false);
   const [showJobAlert, setShowJobAlert] = useState(false);
   const [jobTimer, setJobTimer] = useState(60);
   const [currentJob, setCurrentJob] = useState<LiveJob | null>(null);
@@ -164,6 +182,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     setIsOnline(false);
     isOnlineRef.current = false;
     await AsyncStorage.setItem(onlineStorageKey(rider?.id), 'false');
+    writeOnlinePreference(rider?.id, 'false');
     stopLocationUpdates();
     if (rider?.id) {
       await publishLocation(rider.id, {
@@ -183,6 +202,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     setIsOnline(true);
     isOnlineRef.current = true;
     await AsyncStorage.setItem(onlineStorageKey(rider?.id), 'true');
+    writeOnlinePreference(rider?.id, 'true');
   };
 
   const toggleOnline = () => {
@@ -197,16 +217,27 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     let mounted = true;
 
     const restoreOnlineState = async () => {
+      setPresenceReady(false);
+      const localHint = readOnlinePreference(rider?.id);
+      if (mounted && localHint === 'true') {
+        isOnlineRef.current = true;
+        setIsOnline(true);
+      }
+
       const stored = await AsyncStorage.getItem(onlineStorageKey(rider?.id));
       if (!mounted) return;
 
       if (stored === 'true') {
         isOnlineRef.current = true;
         setIsOnline(true);
+        setPresenceReady(true);
         return;
       }
 
-      if (!rider?.id) return;
+      if (!rider?.id) {
+        setPresenceReady(true);
+        return;
+      }
 
       const recentCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const { data } = await supabase
@@ -217,15 +248,21 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         .gte('last_seen', recentCutoff)
         .maybeSingle();
 
-      if (!mounted || !data?.is_online) return;
+      if (!mounted || !data?.is_online) {
+        setPresenceReady(true);
+        return;
+      }
 
       isOnlineRef.current = true;
       setIsOnline(true);
       await AsyncStorage.setItem(onlineStorageKey(rider.id), 'true');
+      writeOnlinePreference(rider.id, 'true');
+      setPresenceReady(true);
     };
 
     restoreOnlineState().catch((error) => {
       console.error('Unable to restore rider online state', error);
+      setPresenceReady(true);
     });
 
     return () => {
@@ -524,7 +561,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
           <Image source={require('../../assets/images/logo.jpg')} style={styles.logo} resizeMode="contain" />
           <View style={[styles.statusBadge, isOnline && styles.statusBadgeOnline]}>
             <View style={[styles.statusDot, { backgroundColor: isOnline ? '#10B981' : '#555' }]} />
-            <Text style={styles.statusBadgeText}>{isOnline ? 'ONLINE' : 'OFFLINE'}</Text>
+            <Text style={styles.statusBadgeText}>{!presenceReady ? 'RESTORING' : isOnline ? 'ONLINE' : 'OFFLINE'}</Text>
           </View>
         </Animated.View>
 
@@ -535,7 +572,9 @@ export default function HomeScreen({ rider, onAcceptJob }) {
           <Text style={styles.greetingSub}>
             {isOnline
               ? `You are live in ${riderState}. Only eligible local and terminal jobs for your zone will appear.`
-              : 'Tap the button below to start accepting deliveries.'}
+              : !presenceReady
+                ? 'Restoring your rider status...'
+                : 'Tap the button below to start accepting deliveries.'}
           </Text>
         </Animated.View>
 
@@ -543,7 +582,7 @@ export default function HomeScreen({ rider, onAcceptJob }) {
         <Animated.View entering={FadeInDown.duration(700).delay(300)} style={styles.toggleWrap}>
           <View style={styles.toggleOuter}>
             <PulseRing isOnline={isOnline} />
-            <Pressable style={[styles.toggleBtn, isOnline && styles.toggleBtnOnline]} onPress={toggleOnline}>
+            <Pressable style={[styles.toggleBtn, isOnline && styles.toggleBtnOnline, !presenceReady && { opacity: 0.7 }]} onPress={toggleOnline} disabled={!presenceReady}>
               {isOnline
                 ? <Wifi color="#10B981" size={40} strokeWidth={1.5} />
                 : <WifiOff color="rgba(255,255,255,0.35)" size={40} strokeWidth={1.5} />
