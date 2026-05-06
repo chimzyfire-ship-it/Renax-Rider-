@@ -532,11 +532,38 @@ export function stageProgress(stage: DispatchStage | string, routingMode: Routin
   return Math.round((index / (flow.length - 1)) * 100);
 }
 
+/**
+ * Returns a DB-safe machine-readable status value for the shipments.status column.
+ * These values must match the shipments_status_check constraint in Postgres.
+ */
 export function shipmentStatusFromStage(
+  stage: DispatchStage | string,
+  _routingMode?: RoutingMode | string
+): string {
+  const statusMap: Record<string, string> = {
+    pending_routing: 'pending',
+    awaiting_rider_acceptance: 'pending',
+    awaiting_source_terminal: 'in_progress',
+    received_at_source_terminal: 'in_progress',
+    linehaul_in_transit: 'in_progress',
+    received_at_destination_terminal: 'in_progress',
+    awaiting_final_mile_rider: 'in_progress',
+    out_for_delivery: 'in_progress',
+    delivered: 'completed',
+    cancelled: 'cancelled',
+    exception: 'exception',
+  };
+  return statusMap[stage] || 'pending';
+}
+
+/**
+ * Human-readable status label for UI display. Not written to DB.
+ */
+export function shipmentStatusLabel(
   stage: DispatchStage | string,
   routingMode: RoutingMode | string = 'last_mile_local'
 ): string {
-  const statusMap: Record<string, string> = {
+  const labelMap: Record<string, string> = {
     pending_routing: routingMode === 'manual_review' ? 'Pending Review' : 'Pending Routing',
     awaiting_rider_acceptance: routingMode === 'relay_terminal' ? 'Awaiting First-Mile Rider' : 'Awaiting Rider',
     awaiting_source_terminal: 'En Route to Source Hub',
@@ -549,7 +576,7 @@ export function shipmentStatusFromStage(
     cancelled: 'Cancelled',
     exception: 'Exception',
   };
-  return statusMap[stage] || 'Pending Routing';
+  return labelMap[stage] || 'Pending Routing';
 }
 
 export function nextStageForShipment(
