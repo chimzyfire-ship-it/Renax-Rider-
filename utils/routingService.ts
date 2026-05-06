@@ -536,20 +536,23 @@ export function shipmentStatusFromStage(
   stage: DispatchStage | string,
   routingMode: RoutingMode | string = 'last_mile_local'
 ): string {
+  // The DB CHECK constraint on shipments.status only allows:
+  // 'pending', 'in_progress', 'completed', 'cancelled'
+  // Use dispatch_stage for detailed stage tracking; status is the broad state.
   const statusMap: Record<string, string> = {
-    pending_routing: routingMode === 'manual_review' ? 'Pending Review' : 'Pending Routing',
-    awaiting_rider_acceptance: routingMode === 'relay_terminal' ? 'Awaiting First-Mile Rider' : 'Awaiting Rider',
-    awaiting_source_terminal: 'En Route to Source Hub',
-    received_at_source_terminal: 'At Source Hub',
-    linehaul_in_transit: 'Linehaul In Transit',
-    received_at_destination_terminal: 'At Destination Hub',
-    awaiting_final_mile_rider: 'Awaiting Final-Mile Rider',
-    out_for_delivery: 'Out for Delivery',
-    delivered: 'Delivered',
-    cancelled: 'Cancelled',
-    exception: 'Exception',
+    pending_routing: 'pending',
+    awaiting_rider_acceptance: 'pending',
+    awaiting_source_terminal: 'in_progress',
+    received_at_source_terminal: 'in_progress',
+    linehaul_in_transit: 'in_progress',
+    received_at_destination_terminal: 'in_progress',
+    awaiting_final_mile_rider: 'in_progress',
+    out_for_delivery: 'in_progress',
+    delivered: 'completed',
+    cancelled: 'cancelled',
+    exception: 'cancelled',
   };
-  return statusMap[stage] || stageLabel(stage);
+  return statusMap[stage] || 'pending';
 }
 
 export function nextStageForShipment(
