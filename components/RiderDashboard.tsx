@@ -11,6 +11,7 @@ import ProfileScreen from './rider/ProfileScreen';
 import HelpScreen from './rider/HelpScreen';
 import TerminalTasksScreen from './rider/TerminalTasksScreen';
 import { Home, Briefcase, ClipboardList, User, HelpCircle, Warehouse } from 'lucide-react-native';
+import { supabase } from '../supabase';
 
 const TABS = [
   { key: 'home',    Icon: Home,          label: 'Home' },
@@ -69,10 +70,29 @@ export default function RiderDashboard({ rider, onLogout }) {
     const loadDashboardState = async () => {
       try {
         const stored = await AsyncStorage.getItem(dashboardStateKey(rider?.id));
-        if (!stored) return;
-        const parsed = JSON.parse(stored);
+        const parsed = stored ? JSON.parse(stored) : null;
         const restoredJob = parsed?.activeJob || null;
-        if (restoredJob) setActiveJob(restoredJob);
+
+        let liveAssignedJob = null;
+        if (rider?.id) {
+          const { data } = await supabase
+            .from('shipments')
+            .select('*')
+            .or(`assigned_rider_id.eq.${rider.id},final_mile_rider_id.eq.${rider.id}`)
+            .in('dispatch_stage', ['awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          liveAssignedJob = data || null;
+        }
+
+        if (liveAssignedJob) {
+          setActiveJob(liveAssignedJob);
+          setActiveTab('job');
+          return;
+        }
+
+        setActiveJob(null);
         if (parsed?.activeTab === 'job' && !restoredJob) {
           setActiveTab('home');
         } else if (parsed?.activeTab) {
@@ -127,14 +147,19 @@ export default function RiderDashboard({ rider, onLogout }) {
     setActiveTab('history');
   };
 
+  const handleJobCancelled = () => {
+    setActiveJob(null);
+    setActiveTab('home');
+  };
+
   const renderScreen = () => {
     switch (activeTab) {
       case 'home':
-        return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} />;
+        return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
       case 'job':
         return activeJob
-          ? <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} />
-          : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} />;
+          ? <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} onJobCancelled={handleJobCancelled} />
+          : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
       case 'terminals':
         return <TerminalTasksScreen rider={riderProfile} onOpenJob={(job: any) => { setActiveJob(job); setActiveTab('job'); }} />;
       case 'history':
@@ -144,7 +169,7 @@ export default function RiderDashboard({ rider, onLogout }) {
       case 'help':
         return <HelpScreen />;
       default:
-        return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} />;
+        return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
     }
   };
 
