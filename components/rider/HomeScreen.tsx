@@ -196,12 +196,36 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   useEffect(() => {
     let mounted = true;
 
-    AsyncStorage.getItem(onlineStorageKey(rider?.id)).then((stored) => {
+    const restoreOnlineState = async () => {
+      const stored = await AsyncStorage.getItem(onlineStorageKey(rider?.id));
       if (!mounted) return;
+
       if (stored === 'true') {
         isOnlineRef.current = true;
         setIsOnline(true);
+        return;
       }
+
+      if (!rider?.id) return;
+
+      const recentCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const { data } = await supabase
+        .from('rider_locations')
+        .select('is_online, last_seen')
+        .eq('rider_id', rider.id)
+        .eq('is_online', true)
+        .gte('last_seen', recentCutoff)
+        .maybeSingle();
+
+      if (!mounted || !data?.is_online) return;
+
+      isOnlineRef.current = true;
+      setIsOnline(true);
+      await AsyncStorage.setItem(onlineStorageKey(rider.id), 'true');
+    };
+
+    restoreOnlineState().catch((error) => {
+      console.error('Unable to restore rider online state', error);
     });
 
     return () => {
