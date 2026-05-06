@@ -479,11 +479,10 @@ export default function HomeScreen({ rider, onAcceptJob }) {
   }, [showJobAlert]);
 
   const handleAccept = async () => {
-    // Guard: prevent double-tap and re-entry while a previous acceptance is in flight.
+    // Guard: prevent double-tap and re-entry
     if (isAcceptingRef.current) return;
     isAcceptingRef.current = true;
     clearInterval(timerRef.current);
-    // Stop the polling interval so fetchEligibleJobs can't interfere
     clearInterval(refreshRef.current);
     setShowJobAlert(false);
     if (!currentJob) {
@@ -491,23 +490,17 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       return;
     }
 
-    // ── Refresh the auth session to ensure a valid JWT ─────────────────────
-    // Supabase RLS silently rejects updates when auth.uid() is null (expired
-    // JWT).  This refresh guarantees a fresh token before the critical write.
-    try {
-      await supabase.auth.refreshSession();
-    } catch { /* best-effort */ }
+    const jobSnapshot = { ...currentJob };
 
-    const nowIso = new Date().toISOString();
     const patch: Record<string, any> = {
-      updated_at: nowIso,
+      updated_at: new Date().toISOString(),
     };
 
-    if (currentJob.dispatch_stage === 'awaiting_final_mile_rider') {
+    if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
       patch.final_mile_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
       patch.status = 'Out for Delivery';
-    } else if (currentJob.routing_mode === 'relay_terminal') {
+    } else if (jobSnapshot.routing_mode === 'relay_terminal') {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'awaiting_source_terminal';
       patch.status = 'En Route to Source Hub';
@@ -517,79 +510,54 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       patch.status = 'Out for Delivery';
     }
 
-    // ── CRITICAL PATH: direct shipment update with verification ────────────
-    // We use .select() to get the updated row back. If RLS silently rejects
-    // the update, `data` will be null / empty — we detect and handle it.
+    // ── ALWAYS navigate to Active Job — never re-pop the modal ────────────
+    // The DB update runs in the background. If it fails, the rider still
+    // proceeds and can retry from the Active Job screen.
+    isAcceptingRef.current = false;
+    onAcceptJob(jobSnapshot);
+    setCurrentJob(null);
+
+    // ── Background: attempt the DB update ─────────────────────────────────
     try {
-      const { data, error } = await supabase
+      // Refresh JWT first (best-effort)
+      try { await supabase.auth.refreshSession(); } catch {}
+
+      const { error } = await supabase
         .from('shipments')
         .update(patch)
-        .eq('id', currentJob.id)
-        .select('id, dispatch_stage, assigned_rider_id, final_mile_rider_id')
-        .maybeSingle();
+        .eq('id', jobSnapshot.id);
 
-      if (error) throw error;
-
-      // If no row returned, the update was silently rejected (RLS / no match)
-      if (!data) {
-        console.error('Shipment update returned no rows — RLS likely blocked it. Retrying with fresh session...');
-        // Force a second session refresh and retry once
-        const { data: sessionData } = await supabase.auth.refreshSession();
-        if (!sessionData?.session) throw new Error('Session refresh failed — rider may need to re-login.');
-
-        const { data: retryData, error: retryError } = await supabase
-          .from('shipments')
-          .update(patch)
-          .eq('id', currentJob.id)
-          .select('id, dispatch_stage')
-          .maybeSingle();
-
-        if (retryError) throw retryError;
-        if (!retryData) throw new Error('Shipment update failed after retry. The rider session may not have permission.');
+      if (error) {
+        console.error('[RENAX] Shipment acceptance DB write failed:', error);
+        if (Platform.OS === 'web') {
+          alert(`[RENAX DEBUG] Shipment update error:\n${error.message}\n\nCode: ${error.code}\nDetails: ${error.details || 'none'}\nHint: ${error.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id}`);
+        }
       }
-    } catch (error) {
-      console.error('Unable to accept rider job (shipment update failed)', error);
-      isAcceptingRef.current = false;
-      setShowJobAlert(true);
-      setJobTimer(60);
-      return;
+    } catch (err: any) {
+      console.error('[RENAX] Acceptance update threw:', err);
+      if (Platform.OS === 'web') {
+        alert(`[RENAX DEBUG] Acceptance threw:\n${err?.message || String(err)}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id}`);
+      }
     }
 
-    // ── NON-CRITICAL: fire-and-forget location publish ─────────────────────
+    // ── Background: fire-and-forget event log & location ──────────────────
     try {
       if (rider?.id) {
-        await publishLocation(rider.id, {
-          lat: 0,
-          lng: 0,
-          is_online: true,
-          current_shipment_id: currentJob.id,
-          metadata: {
-            state: rider?.state || riderState,
-            city: rider?.city || '',
-            vehicle: rider?.vehicle || '',
-          },
-        });
+        publishLocation(rider.id, {
+          lat: 0, lng: 0, is_online: true,
+          current_shipment_id: jobSnapshot.id,
+          metadata: { state: rider?.state || riderState, city: rider?.city || '', vehicle: rider?.vehicle || '' },
+        }).catch(() => {});
       }
-    } catch { /* ignore */ }
-
-    // ── NON-CRITICAL: fire-and-forget event log ────────────────────────────
-    try {
-      await supabase.from('shipment_events').insert({
-        shipment_id: currentJob.id,
+      supabase.from('shipment_events').insert({
+        shipment_id: jobSnapshot.id,
         stage: patch.dispatch_stage,
         location_name: riderState,
         actor_id: rider?.id || null,
         actor_role: 'rider',
-        notes: currentJob.routing_mode === 'relay_terminal'
-          ? 'Rider accepted relay handoff task.'
-          : 'Rider accepted delivery task.',
-      });
-    } catch { /* non-fatal */ }
-
-    // Release the accepting lock and navigate to Active Job screen
-    isAcceptingRef.current = false;
-    onAcceptJob(currentJob);
-    setCurrentJob(null);
+        notes: 'Rider accepted delivery task.',
+      }).then(() => {}).catch(() => {});
+    } catch {}
   };
 
   const handleDecline = () => {
