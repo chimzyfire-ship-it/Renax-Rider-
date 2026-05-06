@@ -71,8 +71,13 @@ export default function RiderDashboard({ rider, onLogout }) {
         const stored = await AsyncStorage.getItem(dashboardStateKey(rider?.id));
         if (!stored) return;
         const parsed = JSON.parse(stored);
-        if (parsed?.activeTab) setActiveTab(parsed.activeTab);
-        if (parsed?.activeJob) setActiveJob(parsed.activeJob);
+        const restoredJob = parsed?.activeJob || null;
+        if (restoredJob) setActiveJob(restoredJob);
+        if (parsed?.activeTab === 'job' && !restoredJob) {
+          setActiveTab('home');
+        } else if (parsed?.activeTab) {
+          setActiveTab(parsed.activeTab);
+        }
       } catch (error) {
         console.error('Failed to restore rider dashboard state', error);
       }
@@ -127,7 +132,9 @@ export default function RiderDashboard({ rider, onLogout }) {
       case 'home':
         return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} />;
       case 'job':
-        return <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} />;
+        return activeJob
+          ? <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} />
+          : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} />;
       case 'terminals':
         return <TerminalTasksScreen rider={riderProfile} onOpenJob={(job: any) => { setActiveJob(job); setActiveTab('job'); }} />;
       case 'history':
