@@ -483,15 +483,23 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     if (isAcceptingRef.current) return;
     isAcceptingRef.current = true;
     clearInterval(timerRef.current);
+    // Stop the polling interval so fetchEligibleJobs can't interfere
+    clearInterval(refreshRef.current);
     setShowJobAlert(false);
     if (!currentJob) {
       isAcceptingRef.current = false;
       return;
     }
 
+    // ── Refresh the auth session to ensure a valid JWT ─────────────────────
+    // Supabase RLS silently rejects updates when auth.uid() is null (expired
+    // JWT).  This refresh guarantees a fresh token before the critical write.
+    try {
+      await supabase.auth.refreshSession();
+    } catch { /* best-effort */ }
+
     const nowIso = new Date().toISOString();
     const patch: Record<string, any> = {
-      status: 'Rider Assigned',
       updated_at: nowIso,
     };
 
@@ -502,25 +510,43 @@ export default function HomeScreen({ rider, onAcceptJob }) {
     } else if (currentJob.routing_mode === 'relay_terminal') {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'awaiting_source_terminal';
+      patch.status = 'En Route to Source Hub';
     } else {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'out_for_delivery';
       patch.status = 'Out for Delivery';
     }
 
-    // ── CRITICAL PATH: direct shipment update ──────────────────────────────
-    // This is the only call that MUST succeed for acceptance to work.
-    // We do NOT use updateShipmentStageWithProof here because it also writes
-    // to shipment_events and shipment_stage_proofs — if those tables are
-    // missing in production the entire acceptance silently fails and the
-    // modal re-pops in a loop.
+    // ── CRITICAL PATH: direct shipment update with verification ────────────
+    // We use .select() to get the updated row back. If RLS silently rejects
+    // the update, `data` will be null / empty — we detect and handle it.
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('shipments')
         .update(patch)
-        .eq('id', currentJob.id);
+        .eq('id', currentJob.id)
+        .select('id, dispatch_stage, assigned_rider_id, final_mile_rider_id')
+        .maybeSingle();
 
       if (error) throw error;
+
+      // If no row returned, the update was silently rejected (RLS / no match)
+      if (!data) {
+        console.error('Shipment update returned no rows — RLS likely blocked it. Retrying with fresh session...');
+        // Force a second session refresh and retry once
+        const { data: sessionData } = await supabase.auth.refreshSession();
+        if (!sessionData?.session) throw new Error('Session refresh failed — rider may need to re-login.');
+
+        const { data: retryData, error: retryError } = await supabase
+          .from('shipments')
+          .update(patch)
+          .eq('id', currentJob.id)
+          .select('id, dispatch_stage')
+          .maybeSingle();
+
+        if (retryError) throw retryError;
+        if (!retryData) throw new Error('Shipment update failed after retry. The rider session may not have permission.');
+      }
     } catch (error) {
       console.error('Unable to accept rider job (shipment update failed)', error);
       isAcceptingRef.current = false;
@@ -529,42 +555,12 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       return;
     }
 
-    // ── NON-CRITICAL: fire-and-forget event logging & proof recording ──────
-    // These are nice-to-have audit trails. If they fail (missing tables,
-    // RLS, network) the rider still gets the job.
-    try {
-      await updateShipmentStageWithProof({
-        shipmentId: currentJob.id,
-        stage: patch.dispatch_stage,
-        routingMode: currentJob.routing_mode || 'last_mile_local',
-        actorId: rider?.id,
-        actorRole: 'rider',
-        locationName: riderState,
-        notes: currentJob.routing_mode === 'relay_terminal'
-          ? 'Rider accepted relay handoff task.'
-          : 'Rider accepted delivery task.',
-        shipmentPatch: {},  // already applied above — no second write
-        proofs: [
-          {
-            stage: patch.dispatch_stage,
-            proof_type: 'rider_acceptance',
-            notes: 'Rider actively accepted the shipment assignment.',
-            confidence_score: 0.78,
-          },
-        ],
-      });
-    } catch (auditError) {
-      // Non-fatal — the shipment was already updated above.
-      console.warn('Audit trail write failed (non-fatal)', auditError);
-    }
-
-    // publish current_shipment_id to rider_locations so Admin can correlate
+    // ── NON-CRITICAL: fire-and-forget location publish ─────────────────────
     try {
       if (rider?.id) {
-        const pos = await (await import('expo-location')).getCurrentPositionAsync({ accuracy: (await import('expo-location')).Accuracy.Balanced });
         await publishLocation(rider.id, {
-          lat: pos?.coords?.latitude ?? 0,
-          lng: pos?.coords?.longitude ?? 0,
+          lat: 0,
+          lng: 0,
           is_online: true,
           current_shipment_id: currentJob.id,
           metadata: {
@@ -576,8 +572,21 @@ export default function HomeScreen({ rider, onAcceptJob }) {
       }
     } catch { /* ignore */ }
 
-    // Release the accepting lock BEFORE navigating away so the home screen
-    // can respond to future jobs normally.
+    // ── NON-CRITICAL: fire-and-forget event log ────────────────────────────
+    try {
+      await supabase.from('shipment_events').insert({
+        shipment_id: currentJob.id,
+        stage: patch.dispatch_stage,
+        location_name: riderState,
+        actor_id: rider?.id || null,
+        actor_role: 'rider',
+        notes: currentJob.routing_mode === 'relay_terminal'
+          ? 'Rider accepted relay handoff task.'
+          : 'Rider accepted delivery task.',
+      });
+    } catch { /* non-fatal */ }
+
+    // Release the accepting lock and navigate to Active Job screen
     isAcceptingRef.current = false;
     onAcceptJob(currentJob);
     setCurrentJob(null);
