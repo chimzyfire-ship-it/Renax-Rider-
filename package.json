@@ -1,5 +1,6 @@
 {
   "name": "renax-rider",
+  "description": "Rider operations app for RENAX with job acceptance, live location, terminal tasks, proof capture, and final-mile delivery workflows.",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
