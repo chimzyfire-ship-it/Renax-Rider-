@@ -44,6 +44,7 @@ export const ADMIN_APPROVAL_REQUIRED_STAGES = new Set<DispatchStage>([
 
 // ─── Stages valid only for relay shipments ────────────────────────────────────
 export const RELAY_ONLY_STAGES = new Set<DispatchStage>([
+  'awaiting_source_terminal_dropoff',
   'awaiting_source_terminal',
   'received_at_source_terminal',
   'linehaul_in_transit',
@@ -180,6 +181,7 @@ export const STAGE_FLOW_BY_MODE: Record<RoutingMode, DispatchStage[]> = {
   ],
   relay_terminal: [
     'pending_routing',
+    'awaiting_source_terminal_dropoff',
     'awaiting_rider_acceptance',
     'awaiting_source_terminal',
     'received_at_source_terminal',
