@@ -66,6 +66,7 @@ type LiveJob = {
   delivery_state?: string | null;
   source_terminal_id?: string | null;
   destination_terminal_id?: string | null;
+  relay_first_mile_strategy?: 'customer_dropoff' | 'renax_pickup' | null;
   is_agro_shipment?: boolean | null;
   agro_produce_category?: string | null;
   agro_handling_notes?: string | null;
@@ -327,7 +328,12 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
     if (pickupJobs.error) console.error('Unable to load pickup jobs', pickupJobs.error);
     if (finalMileJobs.error) console.error('Unable to load final-mile jobs', finalMileJobs.error);
 
-    const data = [...(pickupJobs.data || []), ...(finalMileJobs.data || [])];
+    const pickupCandidates = (pickupJobs.data || []).filter((job: LiveJob) => {
+      if (job.routing_mode !== 'relay_terminal') return true;
+      return job.relay_first_mile_strategy === 'renax_pickup';
+    });
+
+    const data = [...pickupCandidates, ...(finalMileJobs.data || [])];
 
     if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const declinedJobs = await readDeclinedJobs(rider?.id);
@@ -443,7 +449,10 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
           if (!job) return;
           if (!isFreshLiveJob(job)) return;
           const isRelayFinalMile = job.dispatch_stage === 'awaiting_final_mile_rider' && job.delivery_state === riderState;
-          const isEligibleAwaitingAccept = job.dispatch_stage === 'awaiting_rider_acceptance' && job.pickup_state === riderState;
+          const isEligibleAwaitingAccept =
+            job.dispatch_stage === 'awaiting_rider_acceptance'
+            && job.pickup_state === riderState
+            && (job.routing_mode !== 'relay_terminal' || job.relay_first_mile_strategy === 'renax_pickup');
           if (!isRelayFinalMile && !isEligibleAwaitingAccept) return;
           fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);
@@ -592,14 +601,14 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
           metadata: { state: rider?.state || riderState, city: rider?.city || '', vehicle: rider?.vehicle || '' },
         }).catch(() => {});
       }
-      supabase.from('shipment_events').insert({
+      void supabase.from('shipment_events').insert({
         shipment_id: jobSnapshot.id,
         stage: patch.dispatch_stage,
         location_name: riderState,
         actor_id: rider?.id || null,
         actor_role: 'rider',
         notes: 'Rider accepted delivery task.',
-      }).then(() => {}).catch(() => {});
+      });
     } catch {}
   };
 

@@ -11,6 +11,7 @@ export type RoutingMode = 'last_mile_local' | 'relay_terminal' | 'manual_review'
 export type DispatchStage =
   | 'pending_routing'
   | 'awaiting_rider_acceptance'
+  | 'awaiting_source_terminal_dropoff'
   | 'awaiting_source_terminal'
   | 'received_at_source_terminal'
   | 'linehaul_in_transit'
@@ -65,8 +66,11 @@ export interface RoutingResult {
   reason: string; // human-readable explanation
 }
 
+export type RelayFirstMileStrategy = 'customer_dropoff' | 'renax_pickup';
+
 const RELAY_STAGE_FLOW: DispatchStage[] = [
   'pending_routing',
+  'awaiting_source_terminal_dropoff',
   'awaiting_rider_acceptance',
   'awaiting_source_terminal',
   'received_at_source_terminal',
@@ -87,6 +91,7 @@ const LOCAL_STAGE_FLOW: DispatchStage[] = [
 const STAGE_COLORS: Record<string, string> = {
   pending_routing: '#F59E0B',
   awaiting_rider_acceptance: '#F59E0B',
+  awaiting_source_terminal_dropoff: '#2563EB',
   awaiting_source_terminal: '#3B82F6',
   received_at_source_terminal: '#8B5CF6',
   linehaul_in_transit: '#7C3AED',
@@ -252,12 +257,16 @@ export function findTerminalForState(
  */
 export async function resolveRouting(
   pickupAddress: string,
-  deliveryAddress: string
+  deliveryAddress: string,
+  options?: {
+    relayFirstMileStrategy?: RelayFirstMileStrategy;
+  }
 ): Promise<RoutingResult> {
   const pickupState = extractStateFromAddress(pickupAddress);
   const deliveryState = extractStateFromAddress(deliveryAddress);
   const pickupCity = extractCityFromAddress(pickupAddress);
   const deliveryCity = extractCityFromAddress(deliveryAddress);
+  const relayFirstMileStrategy = options?.relayFirstMileStrategy || 'customer_dropoff';
 
   // ── Cannot parse one or both addresses ───────────────────────────
   if (!pickupState || !deliveryState) {
@@ -297,14 +306,18 @@ export async function resolveRouting(
   if (srcTerminal && dstTerminal) {
     return {
       routing_mode: 'relay_terminal',
-      dispatch_stage: 'awaiting_rider_acceptance', // first-mile rider to source terminal
+      dispatch_stage: relayFirstMileStrategy === 'renax_pickup'
+        ? 'awaiting_rider_acceptance'
+        : 'awaiting_source_terminal_dropoff',
       source_terminal_id: srcTerminal.id,
       destination_terminal_id: dstTerminal.id,
       pickup_state: pickupState,
       pickup_city: pickupCity,
       delivery_state: deliveryState,
       delivery_city: deliveryCity,
-      reason: `Cross-state: ${pickupState} → ${deliveryState}. Relay via ${srcTerminal.name} → ${dstTerminal.name}.`,
+      reason: relayFirstMileStrategy === 'renax_pickup'
+        ? `Cross-state: ${pickupState} → ${deliveryState}. First-mile pickup requested before relay via ${srcTerminal.name} → ${dstTerminal.name}.`
+        : `Cross-state: ${pickupState} → ${deliveryState}. Customer will drop off at ${srcTerminal.name} before relay to ${dstTerminal.name}.`,
     };
   }
 
@@ -543,6 +556,7 @@ export function shipmentStatusFromStage(
   const statusMap: Record<string, string> = {
     pending_routing: 'pending',
     awaiting_rider_acceptance: 'pending',
+    awaiting_source_terminal_dropoff: 'pending',
     awaiting_source_terminal: 'in_progress',
     received_at_source_terminal: 'in_progress',
     linehaul_in_transit: 'in_progress',
@@ -565,7 +579,8 @@ export function shipmentStatusLabel(
 ): string {
   const labelMap: Record<string, string> = {
     pending_routing: routingMode === 'manual_review' ? 'Pending Review' : 'Pending Routing',
-    awaiting_rider_acceptance: routingMode === 'relay_terminal' ? 'Awaiting First-Mile Rider' : 'Awaiting Rider',
+    awaiting_rider_acceptance: routingMode === 'relay_terminal' ? 'Awaiting Source Pickup Vehicle' : 'Awaiting Rider',
+    awaiting_source_terminal_dropoff: 'Awaiting Terminal Drop-Off',
     awaiting_source_terminal: 'En Route to Source Hub',
     received_at_source_terminal: 'At Source Hub',
     linehaul_in_transit: 'Linehaul In Transit',
@@ -585,7 +600,8 @@ export function nextStageForShipment(
 ): DispatchStage {
   if (routingMode === 'relay_terminal') {
     const relayNextStageMap: Partial<Record<DispatchStage, DispatchStage>> = {
-      pending_routing: 'awaiting_rider_acceptance',
+      pending_routing: 'awaiting_source_terminal_dropoff',
+      awaiting_source_terminal_dropoff: 'received_at_source_terminal',
       awaiting_rider_acceptance: 'awaiting_source_terminal',
       awaiting_source_terminal: 'received_at_source_terminal',
       received_at_source_terminal: 'linehaul_in_transit',
@@ -665,7 +681,8 @@ export async function advanceShipmentStage(
 export function stageLabel(stage: DispatchStage | string): string {
   const labels: Record<string, string> = {
     pending_routing:                  'Pending Routing',
-    awaiting_rider_acceptance:        'Awaiting Rider',
+    awaiting_rider_acceptance:        'Awaiting Source Pickup Vehicle',
+    awaiting_source_terminal_dropoff: 'Awaiting Terminal Drop-Off',
     awaiting_source_terminal:         'En Route to Hub',
     received_at_source_terminal:      'At Source Hub',
     linehaul_in_transit:              'Linehaul in Transit',
