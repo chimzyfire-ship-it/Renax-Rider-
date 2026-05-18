@@ -53,7 +53,7 @@ export default function JobHistoryScreen({ rider }: { rider?: any }) {
         const { data, error } = await supabase
           .from('shipments')
           .select('*')
-          .or(`assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
+          .or(`assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},first_mile_pickup_agent_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
           .order('created_at', { ascending: false });
 
         if (error) {

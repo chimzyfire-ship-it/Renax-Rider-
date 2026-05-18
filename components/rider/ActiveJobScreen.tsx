@@ -361,6 +361,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
   const cancelAssignedJob = async () => {
     if (!job?.id || cancelling || phase !== 'pickup') return;
 
+    const isFirstMileAssignment = job?.routing_mode === 'relay_terminal' && job?.first_mile_pickup_agent_id === rider?.id;
     const isFinalMileAssignment = job?.routing_mode === 'relay_terminal' && job?.final_mile_rider_id === rider?.id;
     const releaseStage = isFinalMileAssignment ? 'awaiting_final_mile_rider' : 'awaiting_rider_acceptance';
     const releasePatch: Record<string, any> = {
@@ -379,24 +380,41 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
     setOtpError('');
 
     try {
-      const { data, error } = await supabase
-        .from('shipments')
-        .update(releasePatch)
-        .eq('id', job.id)
-        .select('id')
-        .maybeSingle();
+      if (isFirstMileAssignment) {
+        if (!job?.active_pickup_request_id) {
+          throw new Error('This pickup job is missing its queue record, so it cannot be released yet.');
+        }
 
-      if (error) throw error;
-      if (!data) throw new Error('Could not release this job back to the queue.');
+        const { error } = await supabase.rpc('unassign_first_mile_pickup_agent', {
+          p_payload: {
+            pickup_request_id: job.active_pickup_request_id,
+            reason: 'Assigned pickup driver released the job before pickup confirmation.',
+          },
+        });
+
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from('shipments')
+          .update(releasePatch)
+          .eq('id', job.id)
+          .select('id')
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) throw new Error('Could not release this job back to the queue.');
+      }
 
       try {
         await supabase.from('shipment_events').insert({
           shipment_id: job.id,
-          stage: releaseStage,
+          stage: isFirstMileAssignment ? 'awaiting_source_terminal' : releaseStage,
           location_name: rider?.state || 'Route',
           actor_id: rider?.id || null,
           actor_role: 'rider',
-          notes: 'Rider cancelled accepted job before pickup confirmation.',
+          notes: isFirstMileAssignment
+            ? 'Assigned first-mile pickup driver released the job before pickup confirmation.'
+            : 'Rider cancelled accepted job before pickup confirmation.',
         });
       } catch (eventError) {
         console.error('Unable to log rider cancellation event', eventError);
