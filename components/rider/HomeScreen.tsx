@@ -328,12 +328,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
     if (pickupJobs.error) console.error('Unable to load pickup jobs', pickupJobs.error);
     if (finalMileJobs.error) console.error('Unable to load final-mile jobs', finalMileJobs.error);
 
-    const pickupCandidates = (pickupJobs.data || []).filter((job: LiveJob) => {
-      if (job.routing_mode !== 'relay_terminal') return true;
-      return job.relay_first_mile_strategy === 'renax_pickup';
-    });
-
-    const data = [...pickupCandidates, ...(finalMileJobs.data || [])];
+    const data = [...(pickupJobs.data || []), ...(finalMileJobs.data || [])];
 
     if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const declinedJobs = await readDeclinedJobs(rider?.id);
@@ -387,12 +382,12 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
           supabase
             .from('shipments')
             .select('*', { count: 'exact', head: true })
-            .or(`pickup_state.eq.${riderState},delivery_state.eq.${riderState}`)
+            .or(`assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},first_mile_pickup_agent_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
             .in('dispatch_stage', ['awaiting_rider_acceptance', 'awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery']),
           supabase
             .from('shipments')
             .select('*', { count: 'exact', head: true })
-            .or(`assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
+            .or(`assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},first_mile_pickup_agent_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
             .eq('dispatch_stage', 'delivered'),
         ]);
         setActiveJobs(active ?? 0);
@@ -452,7 +447,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
           const isEligibleAwaitingAccept =
             job.dispatch_stage === 'awaiting_rider_acceptance'
             && job.pickup_state === riderState
-            && (job.routing_mode !== 'relay_terminal' || job.relay_first_mile_strategy === 'renax_pickup');
+            && job.routing_mode !== 'relay_terminal';
           if (!isRelayFinalMile && !isEligibleAwaitingAccept) return;
           fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);

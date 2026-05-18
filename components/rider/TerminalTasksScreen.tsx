@@ -39,8 +39,8 @@ export default function TerminalTasksScreen({ rider, onOpenJob }: { rider: any; 
             .from('shipments')
             .select('*')
             .eq('routing_mode', 'relay_terminal')
-            .or(`pickup_state.eq.${rider?.state || 'Lagos'},delivery_state.eq.${rider?.state || 'Lagos'}`)
-            .in('dispatch_stage', ['awaiting_rider_acceptance', 'awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
+            .or(`first_mile_pickup_agent_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},final_mile_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'},assigned_rider_id.eq.${rider?.id || '00000000-0000-0000-0000-000000000000'}`)
+            .in('dispatch_stage', ['awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
             .order('created_at', { ascending: false }),
         ]);
 
