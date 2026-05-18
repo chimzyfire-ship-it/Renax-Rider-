@@ -3,6 +3,7 @@ import { View, ActivityIndicator } from 'react-native';
 import RiderAuth from '../components/RiderAuth';
 import RiderDashboard from '../components/RiderDashboard';
 import { supabase } from '../supabase';
+import { normalizeLogisticsRoles } from '../utils/logisticsRoles';
 
 function LoadingScreen() {
   return (
@@ -30,11 +31,12 @@ export default function RootIndex() {
       phone_number: null,
       state: 'Lagos',
       city: 'Ikeja',
+      logistics_roles: ['rider'],
     };
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, phone_number, state, city, role')
+      .select('*')
       .eq('id', userId)
       .maybeSingle();
 
@@ -44,14 +46,14 @@ export default function RootIndex() {
       const { data: created, error: createError } = await supabase
         .from('profiles')
         .upsert(defaultProfile)
-        .select('id, email, full_name, phone_number, state, city, role')
+        .select('*')
         .single();
 
       if (createError) throw createError;
       return created;
     }
 
-    const needsRepair = !data.role || !data.state || !data.city;
+    const needsRepair = !data.role || !data.state || !data.city || !Array.isArray(data.logistics_roles);
     if (!needsRepair) return data;
 
     const repairedProfile = {
@@ -62,12 +64,13 @@ export default function RootIndex() {
       phone_number: data.phone_number || null,
       state: data.state || 'Lagos',
       city: data.city || 'Ikeja',
+      logistics_roles: normalizeLogisticsRoles(data.logistics_roles, data.role),
     };
 
     const { data: repaired, error: repairError } = await supabase
       .from('profiles')
       .upsert(repairedProfile)
-      .select('id, email, full_name, phone_number, state, city, role')
+      .select('*')
       .single();
 
     if (repairError) throw repairError;
@@ -91,6 +94,7 @@ export default function RootIndex() {
         state: data?.state || 'Lagos',
         city: data?.city || 'Ikeja',
         role: data?.role || 'driver',
+        logisticsRoles: normalizeLogisticsRoles(data?.logistics_roles, data?.role),
         terminalCode: (data?.state || 'Lagos').slice(0, 3).toUpperCase(),
         vehicle: 'Motorcycle',
         plate: 'LGA-123-XY',
@@ -104,6 +108,7 @@ export default function RootIndex() {
         state: 'Lagos',
         city: 'Ikeja',
         role: 'driver',
+        logisticsRoles: ['rider'],
         terminalCode: 'LAG',
         vehicle: 'Motorcycle',
         plate: 'LGA-123-XY',

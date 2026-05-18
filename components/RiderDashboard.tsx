@@ -12,6 +12,7 @@ import HelpScreen from './rider/HelpScreen';
 import TerminalTasksScreen from './rider/TerminalTasksScreen';
 import { Home, Briefcase, ClipboardList, User, HelpCircle, Warehouse } from 'lucide-react-native';
 import { supabase } from '../supabase';
+import { normalizeLogisticsRoles } from '../utils/logisticsRoles';
 
 const TABS = [
   { key: 'home',    Icon: Home,          label: 'Home' },
@@ -24,7 +25,24 @@ const TABS = [
 
 const dashboardStateKey = (riderId?: string | null) => `renax:rider-dashboard:${riderId || 'demo'}`;
 
-export default function RiderDashboard({ rider, onLogout }) {
+type RiderDashboardProps = {
+  rider?: {
+    id?: string | null;
+    email?: string | null;
+    name?: string;
+    phone?: string;
+    state?: string;
+    city?: string;
+    role?: string;
+    logisticsRoles?: string[];
+    terminalCode?: string;
+    vehicle?: string;
+    plate?: string;
+  } | null;
+  onLogout?: () => void;
+};
+
+export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps) {
   const { width } = useWindowDimensions();
   const isWebWide = Platform.OS === 'web' && width >= 768;
   const [activeTab, setActiveTab] = useState('home');
@@ -33,6 +51,8 @@ export default function RiderDashboard({ rider, onLogout }) {
     ...rider,
     state: rider?.state || 'Lagos',
     city: rider?.city || 'Ikeja',
+    role: rider?.role || 'driver',
+    logisticsRoles: normalizeLogisticsRoles(rider?.logisticsRoles, rider?.role),
     terminalCode: rider?.terminalCode || 'LOS',
     vehicle: rider?.vehicle || 'Motorcycle',
     plate: rider?.plate || 'LGA-123-XY',
@@ -125,11 +145,29 @@ export default function RiderDashboard({ rider, onLogout }) {
   }, [activeJob, activeTab, rider?.id]);
 
   const persistProfile = async (updates: any) => {
-    const nextProfile = { ...riderProfile, ...updates };
+    const nextProfile = {
+      ...riderProfile,
+      ...updates,
+      logisticsRoles: normalizeLogisticsRoles(updates?.logisticsRoles ?? riderProfile?.logisticsRoles, updates?.role ?? riderProfile?.role),
+    };
     setRiderProfile(nextProfile);
     try {
       const key = `renax:rider-profile:${rider?.id || 'demo'}`;
       await AsyncStorage.setItem(key, JSON.stringify(nextProfile));
+      if (rider?.id) {
+        const { error } = await supabase.from('profiles').upsert({
+          id: rider.id,
+          email: riderProfile?.email || rider?.email || null,
+          full_name: nextProfile.name || null,
+          phone_number: riderProfile?.phone || rider?.phone || null,
+          role: nextProfile.role || 'driver',
+          state: nextProfile.state || 'Lagos',
+          city: nextProfile.city || 'Ikeja',
+          logistics_roles: nextProfile.logisticsRoles,
+          is_online: nextProfile.isOnline ?? false,
+        });
+        if (error) throw error;
+      }
     } catch (error) {
       console.error('Failed to persist rider profile', error);
     }

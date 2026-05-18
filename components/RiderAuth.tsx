@@ -9,8 +9,18 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { ArrowRight, Mail, Lock, User, Phone } from 'lucide-react-native';
 import { supabase } from '../supabase';
+import {
+  deriveAccountRole,
+  normalizeLogisticsRoles,
+  RIDER_ACCOUNT_ROLE_OPTIONS,
+  RIDER_LOGISTICS_ROLE_OPTIONS,
+} from '../utils/logisticsRoles';
 
-export default function RiderAuth({ onAuthenticated }) {
+type RiderAuthProps = {
+  onAuthenticated?: () => void;
+};
+
+export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
   const { width } = useWindowDimensions();
   const isCompact = width < 480;
   const [fontsLoaded] = useFonts({
@@ -28,6 +38,8 @@ export default function RiderAuth({ onAuthenticated }) {
   const [phone, setPhone] = useState('');
   const [stateValue, setStateValue] = useState('Lagos');
   const [city, setCity] = useState('Ikeja');
+  const [accountRole, setAccountRole] = useState<'driver' | 'rider'>('rider');
+  const [logisticsRoles, setLogisticsRoles] = useState<string[]>(['rider']);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -50,7 +62,7 @@ export default function RiderAuth({ onAuthenticated }) {
 
       if (error) throw error;
       onAuthenticated?.();
-    } catch (error) {
+    } catch (error: any) {
       setMessage(error?.message || 'Could not sign in.');
     } finally {
       setLoading(false);
@@ -60,6 +72,12 @@ export default function RiderAuth({ onAuthenticated }) {
   const signUp = async () => {
     if (!name.trim() || !email.trim() || !password || !phone.trim()) {
       setMessage('Complete all rider signup fields first.');
+      return;
+    }
+
+    const normalizedRoles = normalizeLogisticsRoles(logisticsRoles, accountRole);
+    if (!normalizedRoles.length) {
+      setMessage('Select at least one logistics role for this staff account.');
       return;
     }
 
@@ -81,22 +99,31 @@ export default function RiderAuth({ onAuthenticated }) {
       const { error: profileError } = await supabase.from('profiles').upsert({
         id: data.user.id,
         email: trimmedEmail,
-        role: 'driver',
+        role: deriveAccountRole(normalizedRoles, accountRole),
         full_name: name.trim(),
         phone_number: trimmedPhone,
         state: stateValue.trim() || 'Lagos',
         city: city.trim() || 'Ikeja',
+        logistics_roles: normalizedRoles,
       });
 
       if (profileError) throw profileError;
 
       setMessage('Rider account created. You are now signed in.');
       onAuthenticated?.();
-    } catch (error) {
+    } catch (error: any) {
       setMessage(error?.message || 'Could not create rider account.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleLogisticsRole = (value: string) => {
+    setLogisticsRoles((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
   };
 
   return (
@@ -177,8 +204,8 @@ export default function RiderAuth({ onAuthenticated }) {
             ) : (
               <>
                 <User color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
-                <Text style={styles.cardTitle}>Create Test Rider Account</Text>
-                <Text style={styles.cardSub}>Use a real email and password for auth. The phone number can still be mock data for testing.</Text>
+                <Text style={styles.cardTitle}>Create Logistics Staff Account</Text>
+                <Text style={styles.cardSub}>Register the actual rider or driver profile now so ops can use state and logistics roles when dispatching work.</Text>
 
                 <View style={styles.inputWrap}>
                   <User color="#6B7280" size={16} />
@@ -234,6 +261,43 @@ export default function RiderAuth({ onAuthenticated }) {
                       value={city}
                       onChangeText={setCity}
                     />
+                  </View>
+                </View>
+
+                <View style={styles.roleSection}>
+                  <Text style={styles.sectionLabel}>Account Role</Text>
+                  <View style={styles.choiceRow}>
+                    {RIDER_ACCOUNT_ROLE_OPTIONS.map((option) => {
+                      const active = accountRole === option.value;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          style={[styles.choiceChip, active && styles.choiceChipActive]}
+                          onPress={() => setAccountRole(option.value)}
+                        >
+                          <Text style={[styles.choiceChipText, active && styles.choiceChipTextActive]}>{option.label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <View style={styles.roleSection}>
+                  <Text style={styles.sectionLabel}>Logistics Roles</Text>
+                  <View style={styles.roleGrid}>
+                    {RIDER_LOGISTICS_ROLE_OPTIONS.map((option) => {
+                      const active = logisticsRoles.includes(option.value);
+                      return (
+                        <Pressable
+                          key={option.value}
+                          style={[styles.roleCard, active && styles.roleCardActive]}
+                          onPress={() => toggleLogisticsRole(option.value)}
+                        >
+                          <Text style={[styles.roleCardTitle, active && styles.roleCardTitleActive]}>{option.label}</Text>
+                          <Text style={[styles.roleCardSub, active && styles.roleCardSubActive]}>{option.description}</Text>
+                        </Pressable>
+                      );
+                    })}
                   </View>
                 </View>
 
@@ -385,6 +449,74 @@ const styles = StyleSheet.create({
   },
   half: {
     flex: 1,
+  },
+  roleSection: {
+    gap: 10,
+    marginBottom: 14,
+  },
+  sectionLabel: {
+    fontFamily: 'Outfit_6',
+    fontSize: 12,
+    color: '#9FC9B3',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  choiceRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  choiceChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(204,253,58,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  choiceChipActive: {
+    backgroundColor: '#ccfd3a',
+    borderColor: '#ccfd3a',
+  },
+  choiceChipText: {
+    fontFamily: 'Outfit_6',
+    fontSize: 13,
+    color: '#d7eadd',
+  },
+  choiceChipTextActive: {
+    color: '#002B22',
+  },
+  roleGrid: {
+    gap: 10,
+  },
+  roleCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(204,253,58,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: 14,
+    gap: 4,
+  },
+  roleCardActive: {
+    backgroundColor: 'rgba(204,253,58,0.15)',
+    borderColor: '#ccfd3a',
+  },
+  roleCardTitle: {
+    fontFamily: 'PlusJakartaSans_6',
+    fontSize: 14,
+    color: '#fff',
+  },
+  roleCardTitleActive: {
+    color: '#ecffd0',
+  },
+  roleCardSub: {
+    fontFamily: 'Outfit_4',
+    fontSize: 12,
+    color: '#8bb39f',
+    lineHeight: 18,
+  },
+  roleCardSubActive: {
+    color: '#d5efdd',
   },
   bigBtn: {
     marginTop: 6,

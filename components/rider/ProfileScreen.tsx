@@ -6,10 +6,42 @@ import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-goo
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { User, Bike, Hash, Phone, LogOut, Check, MapPin } from 'lucide-react-native';
+import {
+  deriveAccountRole,
+  normalizeLogisticsRoles,
+  RIDER_ACCOUNT_ROLE_OPTIONS,
+  RIDER_LOGISTICS_ROLE_OPTIONS,
+} from '../../utils/logisticsRoles';
 
 const VEHICLE_TYPES = ['Motorcycle', 'Bicycle', 'Car', 'Tricycle (Keke)'];
 
-export default function ProfileScreen({ rider, onLogout, onSaveProfile }) {
+type ProfileScreenProps = {
+  rider?: {
+    id?: string | null;
+    name?: string;
+    phone?: string;
+    plate?: string;
+    vehicle?: string;
+    state?: string;
+    city?: string;
+    role?: string;
+    logisticsRoles?: string[];
+    terminalCode?: string;
+  } | null;
+  onLogout?: () => void;
+  onSaveProfile?: (updates: {
+    name: string;
+    plate: string;
+    vehicle: string;
+    state: string;
+    city: string;
+    role: string;
+    logisticsRoles: string[];
+    terminalCode: string;
+  }) => Promise<void> | void;
+};
+
+export default function ProfileScreen({ rider, onLogout, onSaveProfile }: ProfileScreenProps) {
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_8: PlusJakartaSans_800ExtraBold,
     PlusJakartaSans_6: PlusJakartaSans_600SemiBold,
@@ -23,15 +55,42 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }) {
   const [vehicle, setVehicle] = useState(rider?.vehicle || 'Motorcycle');
   const [state, setState] = useState(rider?.state || 'Lagos');
   const [city, setCity] = useState(rider?.city || 'Ikeja');
+  const [accountRole, setAccountRole] = useState<'driver' | 'rider'>(
+    rider?.role === 'rider' ? 'rider' : 'driver',
+  );
+  const [logisticsRoles, setLogisticsRoles] = useState<string[]>(
+    normalizeLogisticsRoles(rider?.logisticsRoles, rider?.role),
+  );
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   if (!fontsLoaded) return null;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const terminalCode = state?.slice(0, 3)?.toUpperCase() || rider?.terminalCode || 'LOS';
-    onSaveProfile?.({ name, plate, vehicle, state, city, terminalCode });
+    const normalizedRoles = normalizeLogisticsRoles(logisticsRoles, accountRole);
+    setSaving(true);
+    await onSaveProfile?.({
+      name,
+      plate,
+      vehicle,
+      state,
+      city,
+      role: deriveAccountRole(normalizedRoles, accountRole),
+      logisticsRoles: normalizedRoles,
+      terminalCode,
+    });
+    setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const toggleLogisticsRole = (value: string) => {
+    setLogisticsRoles((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
   };
 
   return (
@@ -58,6 +117,14 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }) {
 
         {/* Form */}
         <Animated.View entering={FadeInDown.duration(500).delay(200)} style={styles.form}>
+          <View style={styles.fieldGroup}>
+            <View style={styles.fieldIconWrap}><Hash color="#ccfd3a" size={18} /></View>
+            <View style={styles.fieldContent}>
+              <Text style={styles.fieldLabel}>Staff ID</Text>
+              <Text style={styles.fieldReadOnly}>{rider?.id || 'Will appear after registration'}</Text>
+            </View>
+          </View>
+
           {/* Name */}
           <View style={styles.fieldGroup}>
             <View style={styles.fieldIconWrap}><User color="#ccfd3a" size={18} /></View>
@@ -126,6 +193,49 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }) {
             </View>
           </View>
 
+          <View style={styles.fieldGroup}>
+            <View style={styles.fieldIconWrap}><User color="#ccfd3a" size={18} /></View>
+            <View style={styles.fieldContent}>
+              <Text style={styles.fieldLabel}>Account Role</Text>
+              <View style={styles.roleChipRow}>
+                {RIDER_ACCOUNT_ROLE_OPTIONS.map((option) => {
+                  const active = accountRole === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      style={[styles.roleChip, active && styles.roleChipActive]}
+                      onPress={() => setAccountRole(option.value)}
+                    >
+                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>{option.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.vehicleSection}>
+            <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
+            <View style={styles.fieldContent}>
+              <Text style={styles.fieldLabel}>Logistics Roles</Text>
+              <View style={styles.logisticsGrid}>
+                {RIDER_LOGISTICS_ROLE_OPTIONS.map((option) => {
+                  const active = logisticsRoles.includes(option.value);
+                  return (
+                    <Pressable
+                      key={option.value}
+                      style={[styles.logisticsCard, active && styles.logisticsCardActive]}
+                      onPress={() => toggleLogisticsRole(option.value)}
+                    >
+                      <Text style={[styles.logisticsCardTitle, active && styles.logisticsCardTitleActive]}>{option.label}</Text>
+                      <Text style={[styles.logisticsCardSub, active && styles.logisticsCardSubActive]}>{option.description}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+
           {/* Vehicle Type */}
           <View style={styles.vehicleSection}>
             <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
@@ -151,7 +261,7 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }) {
         <Animated.View entering={FadeInDown.duration(500).delay(350)} style={{ paddingHorizontal: 24, gap: 14 }}>
           <Pressable style={[styles.saveBtn, saved && { backgroundColor: '#10B981' }]} onPress={handleSave}>
             {saved ? <Check color="#002B22" size={22} /> : null}
-            <Text style={styles.saveBtnText}>{saved ? 'Saved!' : 'SAVE CHANGES'}</Text>
+            <Text style={styles.saveBtnText}>{saved ? 'Saved!' : saving ? 'SAVING...' : 'SAVE CHANGES'}</Text>
           </Pressable>
 
           <Pressable style={styles.logoutBtn} onPress={onLogout}>
@@ -182,7 +292,19 @@ const styles = StyleSheet.create({
   fieldLabel: { fontFamily: 'Outfit_6', fontSize: 12, color: 'rgba(200,255,220,0.5)', letterSpacing: 1, textTransform: 'uppercase' },
   fieldInput: { fontFamily: 'Outfit_4', fontSize: 16, color: '#fff', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.1)', paddingBottom: 6 },
   fieldReadOnly: { fontFamily: 'Outfit_6', fontSize: 16, color: 'rgba(200,255,220,0.7)' },
+  roleChipRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', marginTop: 4 },
+  roleChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(204,253,58,0.15)', backgroundColor: 'rgba(255,255,255,0.04)' },
+  roleChipActive: { backgroundColor: '#ccfd3a', borderColor: '#ccfd3a' },
+  roleChipText: { fontFamily: 'Outfit_6', fontSize: 13, color: 'rgba(200,255,220,0.85)' },
+  roleChipTextActive: { color: '#002B22' },
   vehicleSection: { flexDirection: 'row', alignItems: 'flex-start', padding: 18, gap: 14 },
+  logisticsGrid: { gap: 10, marginTop: 4 },
+  logisticsCard: { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.03)', padding: 12, gap: 4 },
+  logisticsCardActive: { backgroundColor: 'rgba(204,253,58,0.14)', borderColor: '#ccfd3a' },
+  logisticsCardTitle: { fontFamily: 'PlusJakartaSans_6', fontSize: 13, color: '#fff' },
+  logisticsCardTitleActive: { color: '#efffd4' },
+  logisticsCardSub: { fontFamily: 'Outfit_4', fontSize: 12, color: 'rgba(200,255,220,0.65)', lineHeight: 18 },
+  logisticsCardSubActive: { color: '#d7efd7' },
   vehicleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
   vehicleChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.04)' },
   vehicleChipActive: { backgroundColor: '#ccfd3a', borderColor: '#ccfd3a' },

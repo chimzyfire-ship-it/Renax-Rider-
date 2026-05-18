@@ -15,6 +15,8 @@ const STATUS_CONFIG = {
   'Pending': { color: '#F59E0B', label: 'Pending', Icon: Clock },
 };
 
+type StatusConfigKey = keyof typeof STATUS_CONFIG;
+
 const formatDate = (dateStr: string) => {
   if (!dateStr) return '';
   const date = new Date(dateStr);
@@ -128,7 +130,7 @@ export default function JobHistoryScreen({ rider }: { rider?: any }) {
             </Animated.View>
             {/* Job Cards */}
             {jobs.slice(0, 50).map((job, i) => {
-              const statusKey = mapStatus(job.status);
+              const statusKey = mapStatus(job.status) as StatusConfigKey;
               const cfg = STATUS_CONFIG[statusKey] || STATUS_CONFIG.completed;
               const Icon = cfg.Icon;
               return (
