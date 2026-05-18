@@ -14,7 +14,38 @@ import { parseRenaxQrPayload, uploadShipmentProofPhoto } from '../../utils/proof
 import { enqueue, registerDrainWorker, queueSize } from '../../utils/offlineQueue';
 import { supabase } from '../../supabase';
 
-export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancelled }) {
+type ActiveJob = {
+  id: string;
+  routing_mode?: string | null;
+  dispatch_stage?: string | null;
+  source_terminal_address?: string | null;
+  pickup_address?: string | null;
+  pickup?: string | null;
+  first_mile_pickup_agent_id?: string | null;
+  final_mile_rider_id?: string | null;
+  active_pickup_request_id?: string | null;
+  source_terminal_code?: string | null;
+  tracking_id?: string | null;
+  pickup_otp?: string | null;
+  delivery_otp?: string | null;
+  [key: string]: any;
+};
+
+type ActiveRider = {
+  id?: string | null;
+  state?: string;
+  name?: string;
+  [key: string]: any;
+};
+
+type ActiveJobScreenProps = {
+  job?: ActiveJob | null;
+  rider?: ActiveRider | null;
+  onJobComplete?: () => void;
+  onJobCancelled?: () => void;
+};
+
+export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancelled }: ActiveJobScreenProps) {
   const [phase, setPhase] = useState<'pickup' | 'deliver' | 'done'>('pickup');
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpValue, setOtpValue] = useState('');
@@ -265,7 +296,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
             shipmentId: job.id,
             stage: 'received_at_source_terminal' as const,
             routingMode: job.routing_mode || 'relay_terminal',
-            actorId: rider?.id,
+            actorId: rider?.id ?? undefined,
             actorRole: 'rider',
             locationName: rider?.state || 'Terminal',
             notes: 'Rider handed shipment to source terminal staff.',
@@ -282,7 +313,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
             else { setOtpError('Network error. Tap again to retry.'); submitLock.current = false; setSubmitting(false); return; }
           }
           setPhase('done');
-          setTimeout(onJobComplete, 1800);
+          if (onJobComplete) setTimeout(() => onJobComplete(), 1800);
           return;
         }
 
@@ -345,13 +376,13 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
       try {
         if (rider?.id) {
           navigator.geolocation?.getCurrentPosition(async (pos) => {
-            await publishLocation(rider.id, { lat: pos.coords.latitude, lng: pos.coords.longitude, is_online: true, current_shipment_id: null });
+            await publishLocation(rider.id as string, { lat: pos.coords.latitude, lng: pos.coords.longitude, is_online: true, current_shipment_id: null });
           });
         }
       } catch { /* ignore */ }
       setOtpValue(''); setProofPhotoUri(null); setSignatureDataUrl(null);
       setOtpModalVisible(false);
-      setTimeout(onJobComplete, 2500);
+      if (onJobComplete) setTimeout(() => onJobComplete(), 2500);
     } finally {
       setSubmitting(false);
       submitLock.current = false;

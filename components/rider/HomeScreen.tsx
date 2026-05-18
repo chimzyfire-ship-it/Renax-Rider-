@@ -19,8 +19,9 @@ import {
 import { supabase } from '../../supabase';
 import { publishLocation, startLocationUpdates, stopLocationUpdates } from '../../utils/locationPublisher';
 import { shipmentStatusFromStage, stageLabel } from '../../utils/routingService';
+import { hasLogisticsRole, normalizeLogisticsRoles } from '../../utils/logisticsRoles';
 
-const PulseRing = ({ isOnline }) => {
+const PulseRing = ({ isOnline }: { isOnline: boolean }) => {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0);
   useEffect(() => {
@@ -71,6 +72,16 @@ type LiveJob = {
   agro_produce_category?: string | null;
   agro_handling_notes?: string | null;
   requires_cold_chain?: boolean | null;
+};
+
+type RiderProfile = {
+  id?: string | null;
+  name?: string;
+  state?: string;
+  city?: string;
+  role?: string;
+  logisticsRoles?: string[];
+  vehicle?: string;
 };
 
 const LIVE_JOB_WINDOW_MS = 2 * 60 * 1000;
@@ -132,13 +143,25 @@ async function writeDeclinedJobs(riderId: string | null | undefined, nextValue: 
   }
 }
 
-export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
+export default function HomeScreen({
+  rider,
+  onAcceptJob,
+  activeJob,
+}: {
+  rider?: RiderProfile | null;
+  onAcceptJob?: (job: LiveJob) => void;
+  activeJob?: LiveJob | null;
+}) {
   const [isOnline, setIsOnline] = useState(false);
   const [presenceReady, setPresenceReady] = useState(false);
   const [showJobAlert, setShowJobAlert] = useState(false);
   const [jobTimer, setJobTimer] = useState(60);
   const [currentJob, setCurrentJob] = useState<LiveJob | null>(null);
+  const riderId = rider?.id || null;
   const riderState = rider?.state || 'Lagos';
+  const logisticsRoles = normalizeLogisticsRoles(rider?.logisticsRoles, rider?.role);
+  const canTakeLocalMarketplaceJobs = hasLogisticsRole(logisticsRoles, 'rider', rider?.role);
+  const canTakeRelayFinalMileJobs = hasLogisticsRole(logisticsRoles, 'final_mile', rider?.role) || hasLogisticsRole(logisticsRoles, 'rider', rider?.role);
   const timerRef = useRef<any>(null);
   const channelRef = useRef<any>(null);
   const refreshRef = useRef<any>(null);
@@ -154,12 +177,14 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
       state: rider?.state || riderState,
       city: rider?.city || '',
       vehicle: rider?.vehicle || '',
+      role: rider?.role || 'driver',
+      logistics_roles: logisticsRoles,
     };
 
     try {
       if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(async (pos) => {
-          await publishLocation(rider.id, {
+          await publishLocation(riderId as string, {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
             heading: pos.coords.heading,
@@ -170,7 +195,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
             metadata,
           });
         }, async () => {
-          await publishLocation(rider.id, {
+          await publishLocation(riderId as string, {
             lat: 0,
             lng: 0,
             is_online: true,
@@ -304,25 +329,29 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
 
     const recentCutoff = new Date(Date.now() - LIVE_JOB_WINDOW_MS).toISOString();
     const [pickupJobs, finalMileJobs] = await Promise.all([
-      supabase
-        .from('shipments')
-        .select('*')
-        .eq('pickup_state', riderState)
-        .eq('dispatch_stage', 'awaiting_rider_acceptance')
-        .is('assigned_rider_id', null)
-        .is('final_mile_rider_id', null)
-        .gte('updated_at', recentCutoff)
-        .order('created_at', { ascending: false })
-        .limit(25),
-      supabase
-        .from('shipments')
-        .select('*')
-        .eq('delivery_state', riderState)
-        .eq('dispatch_stage', 'awaiting_final_mile_rider')
-        .is('final_mile_rider_id', null)
-        .gte('updated_at', recentCutoff)
-        .order('created_at', { ascending: false })
-        .limit(25),
+      canTakeLocalMarketplaceJobs
+        ? supabase
+          .from('shipments')
+          .select('*')
+          .eq('pickup_state', riderState)
+          .eq('dispatch_stage', 'awaiting_rider_acceptance')
+          .is('assigned_rider_id', null)
+          .is('final_mile_rider_id', null)
+          .gte('updated_at', recentCutoff)
+          .order('created_at', { ascending: false })
+          .limit(25)
+        : Promise.resolve({ data: [], error: null } as any),
+      canTakeRelayFinalMileJobs
+        ? supabase
+          .from('shipments')
+          .select('*')
+          .eq('delivery_state', riderState)
+          .eq('dispatch_stage', 'awaiting_final_mile_rider')
+          .is('final_mile_rider_id', null)
+          .gte('updated_at', recentCutoff)
+          .order('created_at', { ascending: false })
+          .limit(25)
+        : Promise.resolve({ data: [], error: null } as any),
     ]);
 
     if (pickupJobs.error) console.error('Unable to load pickup jobs', pickupJobs.error);
@@ -443,9 +472,10 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
           const job = (payload.new || payload.record) as LiveJob;
           if (!job) return;
           if (!isFreshLiveJob(job)) return;
-          const isRelayFinalMile = job.dispatch_stage === 'awaiting_final_mile_rider' && job.delivery_state === riderState;
+          const isRelayFinalMile = canTakeRelayFinalMileJobs && job.dispatch_stage === 'awaiting_final_mile_rider' && job.delivery_state === riderState;
           const isEligibleAwaitingAccept =
-            job.dispatch_stage === 'awaiting_rider_acceptance'
+            canTakeLocalMarketplaceJobs
+            && job.dispatch_stage === 'awaiting_rider_acceptance'
             && job.pickup_state === riderState
             && job.routing_mode !== 'relay_terminal';
           if (!isRelayFinalMile && !isEligibleAwaitingAccept) return;
@@ -460,7 +490,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
         }, (payload: any) => {
           const job = (payload.new || payload.record) as LiveJob;
           if (!isFreshLiveJob(job)) return;
-          if (!job || job.delivery_state !== riderState) return;
+          if (!canTakeRelayFinalMileJobs || !job || job.delivery_state !== riderState) return;
           fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);
         })
@@ -477,7 +507,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
       channelRef.current?.unsubscribe();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, riderState, busyShipmentId]);
+  }, [busyShipmentId, canTakeLocalMarketplaceJobs, canTakeRelayFinalMileJobs, isOnline, riderState]);
 
   // Start/stop publishing location when going online/offline
   useEffect(() => {
@@ -572,7 +602,7 @@ export default function HomeScreen({ rider, onAcceptJob, activeJob }) {
         throw new Error('Could not confirm this job assignment. Please try again.');
       }
 
-      onAcceptJob({ ...jobSnapshot, ...patch, ...updatedShipment });
+      onAcceptJob?.({ ...jobSnapshot, ...patch, ...updatedShipment });
       setCurrentJob(null);
       isAcceptingRef.current = false;
     } catch (err: any) {
