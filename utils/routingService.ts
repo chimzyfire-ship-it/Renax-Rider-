@@ -307,7 +307,7 @@ export async function resolveRouting(
     return {
       routing_mode: 'relay_terminal',
       dispatch_stage: relayFirstMileStrategy === 'renax_pickup'
-        ? 'awaiting_rider_acceptance'
+        ? 'awaiting_source_terminal'
         : 'awaiting_source_terminal_dropoff',
       source_terminal_id: srcTerminal.id,
       destination_terminal_id: dstTerminal.id,
@@ -316,7 +316,7 @@ export async function resolveRouting(
       delivery_state: deliveryState,
       delivery_city: deliveryCity,
       reason: relayFirstMileStrategy === 'renax_pickup'
-        ? `Cross-state: ${pickupState} → ${deliveryState}. First-mile pickup requested before relay via ${srcTerminal.name} → ${dstTerminal.name}.`
+        ? `Cross-state: ${pickupState} → ${deliveryState}. Managed first-mile pickup will be queued before relay via ${srcTerminal.name} → ${dstTerminal.name}.`
         : `Cross-state: ${pickupState} → ${deliveryState}. Customer will drop off at ${srcTerminal.name} before relay to ${dstTerminal.name}.`,
     };
   }
