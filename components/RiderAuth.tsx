@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Pressable,
   Platform, Image, KeyboardAvoidingView, ScrollView, useWindowDimensions,
@@ -9,6 +9,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { ArrowRight, Mail, Lock, User, Phone } from 'lucide-react-native';
 import { supabase } from '../supabase';
+import { fetchTerminals } from '../utils/routingService';
 import {
   deriveAccountRole,
   normalizeLogisticsRoles,
@@ -40,8 +41,24 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
   const [city, setCity] = useState('Ikeja');
   const [accountRole, setAccountRole] = useState<'driver' | 'rider'>('rider');
   const [logisticsRoles, setLogisticsRoles] = useState<string[]>(['rider']);
+  const [terminals, setTerminals] = useState<any[]>([]);
+  const [preferredTerminalCode, setPreferredTerminalCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    const loadTerminals = async () => {
+      const terminalRows = await fetchTerminals();
+      setTerminals(terminalRows);
+    };
+
+    loadTerminals();
+  }, []);
+
+  const matchingTerminals = useMemo(
+    () => terminals.filter((terminal) => terminal.state?.toLowerCase() === stateValue.trim().toLowerCase()),
+    [stateValue, terminals],
+  );
 
   if (!fontsLoaded) return null;
 
@@ -96,6 +113,11 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
       if (error) throw error;
       if (!data.user) throw new Error('Rider signup did not return a user account.');
 
+      const resolvedPreferredTerminalCode =
+        preferredTerminalCode
+        || matchingTerminals[0]?.code
+        || stateValue.trim().slice(0, 3).toUpperCase();
+
       const { error: profileError } = await supabase.from('profiles').upsert({
         id: data.user.id,
         email: trimmedEmail,
@@ -105,6 +127,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
         state: stateValue.trim() || 'Lagos',
         city: city.trim() || 'Ikeja',
         logistics_roles: normalizedRoles,
+        preferred_terminal_code: resolvedPreferredTerminalCode,
       });
 
       if (profileError) throw profileError;
@@ -262,6 +285,36 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
                       onChangeText={setCity}
                     />
                   </View>
+                </View>
+
+                <View style={styles.roleSection}>
+                  <Text style={styles.roleSectionLabel}>Preferred Hub</Text>
+                  <Text style={styles.roleSectionSub}>
+                    Choose the terminal this staff account should stay linked to by default. Ops can still assign a different live hub later.
+                  </Text>
+                  <View style={styles.roleChipRow}>
+                    {(matchingTerminals.length > 0 ? matchingTerminals : terminals.slice(0, 6)).map((terminal) => {
+                      const active = preferredTerminalCode === terminal.code;
+                      return (
+                        <Pressable
+                          key={terminal.id}
+                          style={[styles.roleChip, active && styles.roleChipActive]}
+                          onPress={() => setPreferredTerminalCode(terminal.code)}
+                        >
+                          <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                            {terminal.code} • {terminal.city}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.helperCopy}>
+                    {preferredTerminalCode
+                      ? `Selected hub: ${preferredTerminalCode}`
+                      : matchingTerminals[0]?.code
+                        ? `Recommended hub: ${matchingTerminals[0].code}`
+                        : 'Set a state first to see the nearest terminal options.'}
+                  </Text>
                 </View>
 
                 <View style={styles.roleSection}>
@@ -453,6 +506,50 @@ const styles = StyleSheet.create({
   roleSection: {
     gap: 10,
     marginBottom: 14,
+  },
+  roleSectionLabel: {
+    fontFamily: 'Outfit_6',
+    fontSize: 12,
+    color: '#9FC9B3',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  roleSectionSub: {
+    fontFamily: 'Outfit_4',
+    fontSize: 12,
+    color: '#8bb39f',
+    lineHeight: 18,
+  },
+  roleChipRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  roleChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(204,253,58,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  roleChipActive: {
+    backgroundColor: '#ccfd3a',
+    borderColor: '#ccfd3a',
+  },
+  roleChipText: {
+    fontFamily: 'Outfit_6',
+    fontSize: 13,
+    color: '#d7eadd',
+  },
+  roleChipTextActive: {
+    color: '#002B22',
+  },
+  helperCopy: {
+    fontFamily: 'Outfit_4',
+    fontSize: 12,
+    color: 'rgba(200,255,220,0.56)',
+    lineHeight: 18,
   },
   sectionLabel: {
     fontFamily: 'Outfit_6',
