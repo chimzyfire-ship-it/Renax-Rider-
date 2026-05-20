@@ -67,6 +67,7 @@ export interface RoutingResult {
 }
 
 export type RelayFirstMileStrategy = 'customer_dropoff' | 'renax_pickup';
+export type RelayLastMileStrategy = 'recipient_pickup' | 'renax_delivery';
 
 const RELAY_STAGE_FLOW: DispatchStage[] = [
   'pending_routing',
@@ -260,6 +261,7 @@ export async function resolveRouting(
   deliveryAddress: string,
   options?: {
     relayFirstMileStrategy?: RelayFirstMileStrategy;
+    relayLastMileStrategy?: RelayLastMileStrategy;
   }
 ): Promise<RoutingResult> {
   const pickupState = extractStateFromAddress(pickupAddress);
@@ -267,6 +269,7 @@ export async function resolveRouting(
   const pickupCity = extractCityFromAddress(pickupAddress);
   const deliveryCity = extractCityFromAddress(deliveryAddress);
   const relayFirstMileStrategy = options?.relayFirstMileStrategy || 'customer_dropoff';
+  const relayLastMileStrategy = options?.relayLastMileStrategy || 'renax_delivery';
 
   // ── Cannot parse one or both addresses ───────────────────────────
   if (!pickupState || !deliveryState) {
@@ -316,8 +319,8 @@ export async function resolveRouting(
       delivery_state: deliveryState,
       delivery_city: deliveryCity,
       reason: relayFirstMileStrategy === 'renax_pickup'
-        ? `Cross-state: ${pickupState} → ${deliveryState}. Managed first-mile pickup will be queued before relay via ${srcTerminal.name} → ${dstTerminal.name}.`
-        : `Cross-state: ${pickupState} → ${deliveryState}. Customer will drop off at ${srcTerminal.name} before relay to ${dstTerminal.name}.`,
+        ? `Cross-state: ${pickupState} → ${deliveryState}. Managed first-mile pickup will be queued before relay via ${srcTerminal.name} → ${dstTerminal.name}, with ${relayLastMileStrategy === 'recipient_pickup' ? 'recipient terminal pickup' : 'RENAX final-mile delivery'} at destination.`
+        : `Cross-state: ${pickupState} → ${deliveryState}. Customer will drop off at ${srcTerminal.name} before relay to ${dstTerminal.name}, with ${relayLastMileStrategy === 'recipient_pickup' ? 'recipient terminal pickup' : 'RENAX final-mile delivery'} at destination.`,
     };
   }
 
@@ -596,7 +599,8 @@ export function shipmentStatusLabel(
 
 export function nextStageForShipment(
   currentStage: DispatchStage,
-  routingMode: RoutingMode | string = 'last_mile_local'
+  routingMode: RoutingMode | string = 'last_mile_local',
+  relayLastMileStrategy: RelayLastMileStrategy = 'renax_delivery',
 ): DispatchStage {
   if (routingMode === 'relay_terminal') {
     const relayNextStageMap: Partial<Record<DispatchStage, DispatchStage>> = {
@@ -606,7 +610,7 @@ export function nextStageForShipment(
       awaiting_source_terminal: 'received_at_source_terminal',
       received_at_source_terminal: 'linehaul_in_transit',
       linehaul_in_transit: 'received_at_destination_terminal',
-      received_at_destination_terminal: 'awaiting_final_mile_rider',
+      received_at_destination_terminal: relayLastMileStrategy === 'recipient_pickup' ? 'delivered' : 'awaiting_final_mile_rider',
       awaiting_final_mile_rider: 'out_for_delivery',
       out_for_delivery: 'delivered',
     };
@@ -648,16 +652,25 @@ export async function advanceShipmentStage(
   }
 ): Promise<DispatchStage> {
   let resolvedRoutingMode = routingMode;
+  let relayLastMileStrategy: RelayLastMileStrategy = 'renax_delivery';
   if (!resolvedRoutingMode) {
     const { data } = await supabase
       .from('shipments')
-      .select('routing_mode')
+      .select('routing_mode, relay_last_mile_strategy')
       .eq('id', shipmentId)
       .maybeSingle();
     resolvedRoutingMode = data?.routing_mode || 'last_mile_local';
+    relayLastMileStrategy = (data?.relay_last_mile_strategy as RelayLastMileStrategy) || 'renax_delivery';
+  } else if (resolvedRoutingMode === 'relay_terminal' && currentStage === 'received_at_destination_terminal') {
+    const { data } = await supabase
+      .from('shipments')
+      .select('relay_last_mile_strategy')
+      .eq('id', shipmentId)
+      .maybeSingle();
+    relayLastMileStrategy = (data?.relay_last_mile_strategy as RelayLastMileStrategy) || 'renax_delivery';
   }
 
-  const nextStage = nextStageForShipment(currentStage, resolvedRoutingMode);
+  const nextStage = nextStageForShipment(currentStage, resolvedRoutingMode, relayLastMileStrategy);
   if (!nextStage) return currentStage;
 
   await updateShipmentStageWithProof({

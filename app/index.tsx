@@ -4,6 +4,7 @@ import RiderAuth from '../components/RiderAuth';
 import RiderDashboard from '../components/RiderDashboard';
 import { supabase } from '../supabase';
 import { normalizeLogisticsRoles } from '../utils/logisticsRoles';
+import { fetchTerminals } from '../utils/routingService';
 
 function LoadingScreen() {
   return (
@@ -32,6 +33,7 @@ export default function RootIndex() {
       state: 'Lagos',
       city: 'Ikeja',
       logistics_roles: ['rider'],
+      preferred_terminal_code: 'LOS',
     };
 
     const { data, error } = await supabase
@@ -53,7 +55,12 @@ export default function RootIndex() {
       return created;
     }
 
-    const needsRepair = !data.role || !data.state || !data.city || !Array.isArray(data.logistics_roles);
+    const needsRepair =
+      !data.role
+      || !data.state
+      || !data.city
+      || !Array.isArray(data.logistics_roles)
+      || !data.preferred_terminal_code;
     if (!needsRepair) return data;
 
     const repairedProfile = {
@@ -65,6 +72,7 @@ export default function RootIndex() {
       state: data.state || 'Lagos',
       city: data.city || 'Ikeja',
       logistics_roles: normalizeLogisticsRoles(data.logistics_roles, data.role),
+      preferred_terminal_code: data.preferred_terminal_code || 'LOS',
     };
 
     const { data: repaired, error: repairError } = await supabase
@@ -86,6 +94,12 @@ export default function RootIndex() {
 
     try {
       const data = await ensureRiderProfile(nextSession);
+      const terminals = await fetchTerminals();
+      const assignedTerminal =
+        terminals.find((terminal) => terminal.id === data?.assigned_terminal_id)
+        || terminals.find((terminal) => terminal.code === data?.preferred_terminal_code)
+        || terminals.find((terminal) => terminal.state?.toLowerCase() === String(data?.state || '').toLowerCase())
+        || null;
 
       setRider({
         id: nextSession.user.id,
@@ -95,7 +109,11 @@ export default function RootIndex() {
         city: data?.city || 'Ikeja',
         role: data?.role || 'driver',
         logisticsRoles: normalizeLogisticsRoles(data?.logistics_roles, data?.role),
-        terminalCode: (data?.state || 'Lagos').slice(0, 3).toUpperCase(),
+        terminalCode: assignedTerminal?.code || data?.preferred_terminal_code || (data?.state || 'Lagos').slice(0, 3).toUpperCase(),
+        preferredTerminalCode: data?.preferred_terminal_code || assignedTerminal?.code || 'LOS',
+        assignedTerminalId: data?.assigned_terminal_id || assignedTerminal?.id || null,
+        assignedTerminalName: assignedTerminal?.name || '',
+        assignedTerminalAddress: assignedTerminal?.address || '',
         vehicle: 'Motorcycle',
         plate: 'LGA-123-XY',
       });
@@ -110,6 +128,10 @@ export default function RootIndex() {
         role: 'driver',
         logisticsRoles: ['rider'],
         terminalCode: 'LAG',
+        preferredTerminalCode: 'LAG',
+        assignedTerminalId: null,
+        assignedTerminalName: '',
+        assignedTerminalAddress: '',
         vehicle: 'Motorcycle',
         plate: 'LGA-123-XY',
       });

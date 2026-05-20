@@ -1,5 +1,5 @@
 // components/rider/ProfileScreen.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Platform, Image, TextInput } from 'react-native';
 import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } from '@expo-google-fonts/plus-jakarta-sans';
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
@@ -12,6 +12,7 @@ import {
   RIDER_ACCOUNT_ROLE_OPTIONS,
   RIDER_LOGISTICS_ROLE_OPTIONS,
 } from '../../utils/logisticsRoles';
+import { fetchTerminals } from '../../utils/routingService';
 
 const VEHICLE_TYPES = ['Motorcycle', 'Bicycle', 'Car', 'Tricycle (Keke)'];
 
@@ -27,6 +28,9 @@ type ProfileScreenProps = {
     role?: string;
     logisticsRoles?: string[];
     terminalCode?: string;
+    preferredTerminalCode?: string;
+    assignedTerminalName?: string;
+    assignedTerminalAddress?: string;
   } | null;
   onLogout?: () => void;
   onSaveProfile?: (updates: {
@@ -37,7 +41,7 @@ type ProfileScreenProps = {
     city: string;
     role: string;
     logisticsRoles: string[];
-    terminalCode: string;
+    preferredTerminalCode: string;
   }) => Promise<void> | void;
 };
 
@@ -61,14 +65,37 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
   const [logisticsRoles, setLogisticsRoles] = useState<string[]>(
     normalizeLogisticsRoles(rider?.logisticsRoles, rider?.role),
   );
+  const [terminals, setTerminals] = useState<any[]>([]);
+  const [preferredTerminalCode, setPreferredTerminalCode] = useState(
+    rider?.preferredTerminalCode || rider?.terminalCode || '',
+  );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const loadTerminals = async () => {
+      const terminalRows = await fetchTerminals();
+      setTerminals(terminalRows);
+    };
+
+    loadTerminals();
+  }, []);
+
+  const matchingTerminals = useMemo(
+    () => terminals.filter((terminal) => terminal.state?.toLowerCase() === state.trim().toLowerCase()),
+    [state, terminals],
+  );
 
   if (!fontsLoaded) return null;
 
   const handleSave = async () => {
-    const terminalCode = state?.slice(0, 3)?.toUpperCase() || rider?.terminalCode || 'LOS';
     const normalizedRoles = normalizeLogisticsRoles(logisticsRoles, accountRole);
+    const resolvedPreferredTerminalCode =
+      preferredTerminalCode
+      || matchingTerminals[0]?.code
+      || rider?.preferredTerminalCode
+      || rider?.terminalCode
+      || 'LOS';
     setSaving(true);
     await onSaveProfile?.({
       name,
@@ -78,7 +105,7 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
       city,
       role: deriveAccountRole(normalizedRoles, accountRole),
       logisticsRoles: normalizedRoles,
-      terminalCode,
+      preferredTerminalCode: resolvedPreferredTerminalCode,
     });
     setSaving(false);
     setSaved(true);
@@ -125,6 +152,17 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
             </View>
           </View>
 
+          <View style={styles.fieldGroup}>
+            <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
+            <View style={styles.fieldContent}>
+              <Text style={styles.fieldLabel}>Assigned Hub</Text>
+              <Text style={styles.fieldReadOnly}>{rider?.assignedTerminalName || 'Not assigned by ops yet'}</Text>
+              <Text style={styles.helperText}>
+                {rider?.assignedTerminalAddress || 'Your live hub remains stable even if you update your operating state or city.'}
+              </Text>
+            </View>
+          </View>
+
           {/* Name */}
           <View style={styles.fieldGroup}>
             <View style={styles.fieldIconWrap}><User color="#ccfd3a" size={18} /></View>
@@ -162,6 +200,34 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
                 placeholderTextColor="#3a5c47"
                 autoCapitalize="characters"
               />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
+            <View style={styles.fieldContent}>
+              <Text style={styles.fieldLabel}>Preferred Hub</Text>
+              <View style={styles.roleChipRow}>
+                {(matchingTerminals.length > 0 ? matchingTerminals : terminals.slice(0, 6)).map((terminal) => {
+                  const active = preferredTerminalCode === terminal.code;
+                  return (
+                    <Pressable
+                      key={terminal.id}
+                      style={[styles.roleChip, active && styles.roleChipActive]}
+                      onPress={() => setPreferredTerminalCode(terminal.code)}
+                    >
+                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                        {terminal.code} • {terminal.city}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={styles.helperText}>
+                {preferredTerminalCode
+                  ? `Preferred hub saved as ${preferredTerminalCode}.`
+                  : 'Choose the terminal this account should stay linked to by default.'}
+              </Text>
             </View>
           </View>
 
@@ -292,6 +358,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontFamily: 'Outfit_6', fontSize: 12, color: 'rgba(200,255,220,0.5)', letterSpacing: 1, textTransform: 'uppercase' },
   fieldInput: { fontFamily: 'Outfit_4', fontSize: 16, color: '#fff', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.1)', paddingBottom: 6 },
   fieldReadOnly: { fontFamily: 'Outfit_6', fontSize: 16, color: 'rgba(200,255,220,0.7)' },
+  helperText: { fontFamily: 'Outfit_4', fontSize: 12, color: 'rgba(200,255,220,0.56)', lineHeight: 18 },
   roleChipRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', marginTop: 4 },
   roleChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(204,253,58,0.15)', backgroundColor: 'rgba(255,255,255,0.04)' },
   roleChipActive: { backgroundColor: '#ccfd3a', borderColor: '#ccfd3a' },

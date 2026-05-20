@@ -36,6 +36,10 @@ type RiderDashboardProps = {
     role?: string;
     logisticsRoles?: string[];
     terminalCode?: string;
+    preferredTerminalCode?: string;
+    assignedTerminalId?: string | null;
+    assignedTerminalName?: string;
+    assignedTerminalAddress?: string;
     vehicle?: string;
     plate?: string;
   } | null;
@@ -54,6 +58,10 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
     role: rider?.role || 'driver',
     logisticsRoles: normalizeLogisticsRoles(rider?.logisticsRoles, rider?.role),
     terminalCode: rider?.terminalCode || 'LOS',
+    preferredTerminalCode: rider?.preferredTerminalCode || rider?.terminalCode || 'LOS',
+    assignedTerminalId: rider?.assignedTerminalId || null,
+    assignedTerminalName: rider?.assignedTerminalName || '',
+    assignedTerminalAddress: rider?.assignedTerminalAddress || '',
     vehicle: rider?.vehicle || 'Motorcycle',
     plate: rider?.plate || 'LGA-123-XY',
   }), [rider]);
@@ -164,6 +172,7 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
           state: nextProfile.state || 'Lagos',
           city: nextProfile.city || 'Ikeja',
           logistics_roles: nextProfile.logisticsRoles,
+          preferred_terminal_code: nextProfile.preferredTerminalCode || null,
           is_online: nextProfile.isOnline ?? false,
         });
         if (error) throw error;
