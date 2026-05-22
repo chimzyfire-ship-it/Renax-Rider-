@@ -351,6 +351,9 @@ export async function logShipmentEvent(
 ): Promise<void> {
   await supabase.from('shipment_events').insert({
     shipment_id: shipmentId,
+    title: stage.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()),
+    description: notes || `Shipment moved to ${stage.replace(/_/g, ' ')}.`,
+    status: stage,
     stage,
     location_name: locationName || null,
     actor_id: actorId || null,

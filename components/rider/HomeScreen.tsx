@@ -57,6 +57,8 @@ type LiveJob = {
   pickup_lat?: number | null;
   pickup_lon?: number | null;
   delivery_address: string;
+  delivery_lat?: number | null;
+  delivery_lon?: number | null;
   package_category: string;
   distance_km: number | null;
   estimated_price: number;
@@ -68,6 +70,7 @@ type LiveJob = {
   source_terminal_id?: string | null;
   destination_terminal_id?: string | null;
   relay_first_mile_strategy?: 'customer_dropoff' | 'renax_pickup' | null;
+  relay_last_mile_strategy?: 'recipient_pickup' | 'renax_delivery' | null;
   is_agro_shipment?: boolean | null;
   agro_produce_category?: string | null;
   agro_handling_notes?: string | null;
@@ -81,6 +84,8 @@ type RiderProfile = {
   city?: string;
   role?: string;
   logisticsRoles?: string[];
+  assignedTerminalId?: string | null;
+  preferredTerminalCode?: string | null;
   vehicle?: string;
 };
 
@@ -357,7 +362,17 @@ export default function HomeScreen({
     if (pickupJobs.error) console.error('Unable to load pickup jobs', pickupJobs.error);
     if (finalMileJobs.error) console.error('Unable to load final-mile jobs', finalMileJobs.error);
 
-    const data = [...(pickupJobs.data || []), ...(finalMileJobs.data || [])];
+    const eligibleFinalMileJobs = (finalMileJobs.data || []).filter((job: LiveJob) => {
+      if (!job || job.relay_last_mile_strategy !== 'renax_delivery') return false;
+
+      if (rider?.assignedTerminalId && job.destination_terminal_id) {
+        return job.destination_terminal_id === rider.assignedTerminalId;
+      }
+
+      return true;
+    });
+
+    const data = [...(pickupJobs.data || []), ...eligibleFinalMileJobs];
 
     if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const declinedJobs = await readDeclinedJobs(rider?.id);
@@ -379,12 +394,24 @@ export default function HomeScreen({
       if (typeof riderLat === 'number' && typeof riderLon === 'number') {
         chosenJob = [...freshJobs].sort((a: LiveJob, b: LiveJob) => {
           const distA =
-            typeof a.pickup_lat === 'number' && typeof a.pickup_lon === 'number'
-              ? distanceKm(riderLat, riderLon, a.pickup_lat, a.pickup_lon)
+            typeof (a.dispatch_stage === 'awaiting_final_mile_rider' ? a.delivery_lat : a.pickup_lat) === 'number'
+            && typeof (a.dispatch_stage === 'awaiting_final_mile_rider' ? a.delivery_lon : a.pickup_lon) === 'number'
+              ? distanceKm(
+                riderLat,
+                riderLon,
+                (a.dispatch_stage === 'awaiting_final_mile_rider' ? a.delivery_lat : a.pickup_lat) as number,
+                (a.dispatch_stage === 'awaiting_final_mile_rider' ? a.delivery_lon : a.pickup_lon) as number
+              )
               : Number.POSITIVE_INFINITY;
           const distB =
-            typeof b.pickup_lat === 'number' && typeof b.pickup_lon === 'number'
-              ? distanceKm(riderLat, riderLon, b.pickup_lat, b.pickup_lon)
+            typeof (b.dispatch_stage === 'awaiting_final_mile_rider' ? b.delivery_lat : b.pickup_lat) === 'number'
+            && typeof (b.dispatch_stage === 'awaiting_final_mile_rider' ? b.delivery_lon : b.pickup_lon) === 'number'
+              ? distanceKm(
+                riderLat,
+                riderLon,
+                (b.dispatch_stage === 'awaiting_final_mile_rider' ? b.delivery_lat : b.pickup_lat) as number,
+                (b.dispatch_stage === 'awaiting_final_mile_rider' ? b.delivery_lon : b.pickup_lon) as number
+              )
               : Number.POSITIVE_INFINITY;
           return distA - distB;
         })[0] as LiveJob;
@@ -571,11 +598,7 @@ export default function HomeScreen({
       updated_at: new Date().toISOString(),
     };
 
-    if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
-      patch.final_mile_rider_id = rider?.id || null;
-      patch.dispatch_stage = 'out_for_delivery';
-      patch.status = shipmentStatusFromStage('out_for_delivery', jobSnapshot.routing_mode || 'last_mile_local');
-    } else if (jobSnapshot.routing_mode === 'relay_terminal') {
+    if (jobSnapshot.routing_mode === 'relay_terminal') {
       patch.assigned_rider_id = rider?.id || null;
       patch.dispatch_stage = 'awaiting_source_terminal';
       patch.status = shipmentStatusFromStage('awaiting_source_terminal', jobSnapshot.routing_mode || 'relay_terminal');
@@ -587,6 +610,33 @@ export default function HomeScreen({
 
     try {
       try { await supabase.auth.refreshSession(); } catch {}
+
+      if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
+        const { error: claimError } = await supabase.rpc('claim_final_mile_delivery_job', {
+          p_payload: {
+            shipment_id: jobSnapshot.id,
+            reason: 'Rider accepted a destination-terminal final-mile dispatch job.',
+          },
+        });
+
+        if (claimError) throw claimError;
+
+        const { data: updatedShipment, error: shipmentError } = await supabase
+          .from('shipments')
+          .select('*')
+          .eq('id', jobSnapshot.id)
+          .maybeSingle();
+
+        if (shipmentError) throw shipmentError;
+        if (!updatedShipment) {
+          throw new Error('Could not confirm this final-mile assignment. Please try again.');
+        }
+
+        onAcceptJob?.({ ...jobSnapshot, ...updatedShipment });
+        setCurrentJob(null);
+        isAcceptingRef.current = false;
+        return;
+      }
 
       const { data: updatedShipment, error } = await supabase
         .from('shipments')
