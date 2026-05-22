@@ -424,6 +424,15 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
         });
 
         if (error) throw error;
+      } else if (isFinalMileAssignment) {
+        const { error } = await supabase.rpc('unassign_final_mile_rider', {
+          p_payload: {
+            shipment_id: job.id,
+            reason: 'Assigned final-mile rider released the delivery before recipient handoff.',
+          },
+        });
+
+        if (error) throw error;
       } else {
         const { data, error } = await supabase
           .from('shipments')
@@ -445,6 +454,8 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
           actor_role: 'rider',
           notes: isFirstMileAssignment
             ? 'Assigned first-mile pickup driver released the job before pickup confirmation.'
+            : isFinalMileAssignment
+              ? 'Assigned final-mile rider released the delivery before recipient handoff.'
             : 'Rider cancelled accepted job before pickup confirmation.',
         });
       } catch (eventError) {
