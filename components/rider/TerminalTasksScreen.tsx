@@ -80,7 +80,7 @@ export default function TerminalTasksScreen({ rider, onOpenJob }: { rider: any; 
           .select('*')
           .eq('routing_mode', 'relay_terminal')
           .or(`first_mile_pickup_agent_id.eq.${riderId},final_mile_rider_id.eq.${riderId},assigned_rider_id.eq.${riderId}`)
-          .in('dispatch_stage', ['awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
+          .in('dispatch_stage', ['awaiting_rider_acceptance', 'awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
           .order('created_at', { ascending: false }),
         canSeePickupOffers
           ? supabase

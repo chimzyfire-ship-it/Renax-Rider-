@@ -310,7 +310,7 @@ export async function resolveRouting(
     return {
       routing_mode: 'relay_terminal',
       dispatch_stage: relayFirstMileStrategy === 'renax_pickup'
-        ? 'awaiting_source_terminal'
+        ? 'awaiting_rider_acceptance'
         : 'awaiting_source_terminal_dropoff',
       source_terminal_id: srcTerminal.id,
       destination_terminal_id: dstTerminal.id,

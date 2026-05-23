@@ -52,6 +52,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
   const [otpError, setOtpError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [proofPhotoUri, setProofPhotoUri] = useState<string | null>(null);
+  const [stageOverride, setStageOverride] = useState<string | null>(null);
   const [scanModalVisible, setScanModalVisible] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
   const [webScanError, setWebScanError] = useState('');
@@ -85,6 +86,14 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
       ? 'Enter pickup verification code'
       : 'Enter delivery verification code';
 
+  useEffect(() => {
+    setStageOverride(null);
+    setPhase('pickup');
+    setOtpValue('');
+    setProofPhotoUri(null);
+    setSignatureDataUrl(null);
+  }, [job?.id, job?.dispatch_stage]);
+
   // Network status listener
   useEffect(() => {
     const onOnline  = () => { setIsOnline(true);  setPendingQueueSize(queueSize()); };
@@ -115,8 +124,14 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
     });
   }, []);
 
-  const isRelayToSourceTerminal = job?.routing_mode === 'relay_terminal' && job?.dispatch_stage === 'awaiting_source_terminal';
-  const isFinalMileRelay = job?.routing_mode === 'relay_terminal' && (job?.dispatch_stage === 'out_for_delivery' || job?.dispatch_stage === 'awaiting_final_mile_rider');
+  const currentDispatchStage = stageOverride || job?.dispatch_stage || null;
+  const isManagedFirstMileRelay =
+    job?.routing_mode === 'relay_terminal' &&
+    job?.relay_first_mile_strategy === 'renax_pickup' &&
+    job?.first_mile_pickup_agent_id === rider?.id;
+  const isRelayFirstMilePickupStage = isManagedFirstMileRelay && currentDispatchStage === 'awaiting_rider_acceptance';
+  const isRelayToSourceTerminal = job?.routing_mode === 'relay_terminal' && currentDispatchStage === 'awaiting_source_terminal';
+  const isFinalMileRelay = job?.routing_mode === 'relay_terminal' && (currentDispatchStage === 'out_for_delivery' || currentDispatchStage === 'awaiting_final_mile_rider');
 
   const stopWebScanner = () => {
     if (webScanIntervalRef.current) {
@@ -239,7 +254,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
     Linking.openURL(url);
   };
 
-  const buildGpsProof = async (stage: 'out_for_delivery' | 'received_at_source_terminal' | 'delivered') => {
+  const buildGpsProof = async (stage: 'awaiting_source_terminal' | 'out_for_delivery' | 'received_at_source_terminal' | 'delivered') => {
     try {
       const locationModule = await import('expo-location');
       const pos = await locationModule.getCurrentPositionAsync({ accuracy: locationModule.Accuracy.Balanced });
@@ -279,7 +294,13 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
       if (proofPhotoUri) {
         uploadedPhotoUrl = await uploadShipmentProofPhoto({
           shipmentId: job.id,
-          stage: phase === 'pickup' ? (isRelayToSourceTerminal ? 'received_at_source_terminal' : 'out_for_delivery') : 'delivered',
+          stage: phase === 'pickup'
+            ? isRelayFirstMilePickupStage
+              ? 'awaiting_source_terminal'
+              : isRelayToSourceTerminal
+                ? 'received_at_source_terminal'
+                : 'out_for_delivery'
+            : 'delivered',
           riderId: rider?.id,
           uri: proofPhotoUri,
         });
@@ -290,6 +311,39 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
       }
 
       if (phase === 'pickup') {
+        if (isRelayFirstMilePickupStage) {
+          const gpsProof = await buildGpsProof('awaiting_source_terminal');
+          const proofParams = {
+            shipmentId: job.id,
+            stage: 'awaiting_source_terminal' as const,
+            locationName: job.pickup_address || rider?.state || 'Sender pickup',
+            notes: 'Sender pickup OTP verified; first-mile vehicle is en route to the source terminal.',
+            otp: otpValue.trim(),
+            proofs: [
+              gpsProof,
+              { stage: 'awaiting_source_terminal' as const, proof_type: 'pickup_otp', proof_value: otpValue.trim(), notes: 'Sender pickup OTP verified for managed first-mile pickup.', confidence_score: 0.98, media_url: uploadedPhotoUrl },
+              ...(signatureDataUrl ? [{ stage: 'awaiting_source_terminal' as const, proof_type: 'signature', notes: 'Sender signature captured at first-mile pickup.', confidence_score: 0.96, media_url: signatureDataUrl }] : []),
+            ],
+          };
+          try {
+            await verifyShipmentStageSecure(proofParams);
+          } catch (error: any) {
+            if (!navigator.onLine) { enqueue('proof', proofParams as any); }
+            else {
+              setOtpError(error?.message || 'First-mile pickup verification failed. Tap again to retry.');
+              submitLock.current = false;
+              setSubmitting(false);
+              return;
+            }
+          }
+          setStageOverride('awaiting_source_terminal');
+          setPhase('pickup');
+          setOtpValue(''); setProofPhotoUri(null); setSignatureDataUrl(null);
+          setOtpModalVisible(false); setSubmitting(false);
+          submitLock.current = false;
+          return;
+        }
+
         if (isRelayToSourceTerminal) {
           const gpsProof = await buildGpsProof('received_at_source_terminal');
           const proofParams = {
@@ -448,7 +502,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
       try {
         await supabase.from('shipment_events').insert({
           shipment_id: job.id,
-          stage: isFirstMileAssignment ? 'awaiting_source_terminal' : releaseStage,
+          stage: isFirstMileAssignment ? (currentDispatchStage || 'awaiting_rider_acceptance') : releaseStage,
           location_name: rider?.state || 'Route',
           actor_id: rider?.id || null,
           actor_role: 'rider',
@@ -538,7 +592,11 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
     const parsed = parseRenaxQrPayload(data);
     const jobTrackingId = String(job?.tracking_id || '').trim();
     const failureStage = phase === 'pickup'
-      ? (isRelayToSourceTerminal ? 'received_at_source_terminal' : 'out_for_delivery')
+      ? isRelayFirstMilePickupStage
+        ? 'awaiting_source_terminal'
+        : isRelayToSourceTerminal
+          ? 'received_at_source_terminal'
+          : 'out_for_delivery'
       : 'delivered';
     const trackFailure = async (reason: string, scannedTrackingId?: string) => {
       if (!job?.id) return;
@@ -697,7 +755,9 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
               ? (isRelayToSourceTerminal ? 'Take the package to the source terminal' : 'Go pick up the package')
               : 'Deliver the package'}
           </Text>
-          <Text style={styles.phaseHint}>{stageLabel(job.dispatch_stage || 'awaiting_rider_acceptance')}</Text>
+          <Text style={styles.phaseHint}>
+            {isRelayFirstMilePickupStage ? 'First-mile vehicle assigned' : stageLabel(currentDispatchStage || 'awaiting_rider_acceptance')}
+          </Text>
 
           {/* Visual trust badge */}
           <View style={styles.trustBadgeRow}>
