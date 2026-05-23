@@ -372,7 +372,13 @@ export default function HomeScreen({
       return true;
     });
 
-    const data = [...(pickupJobs.data || []), ...eligibleFinalMileJobs];
+    const eligiblePickupJobs = (pickupJobs.data || []).filter((job: LiveJob) => {
+      if (!job) return false;
+      // Inter-state RENAX first-mile pickup is a controlled private pool, not the open rider marketplace.
+      return job.routing_mode !== 'relay_terminal';
+    });
+
+    const data = [...eligiblePickupJobs, ...eligibleFinalMileJobs];
 
     if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const declinedJobs = await readDeclinedJobs(rider?.id);

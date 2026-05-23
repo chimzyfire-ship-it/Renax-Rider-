@@ -107,7 +107,7 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
             .from('shipments')
             .select('*')
             .or(`assigned_rider_id.eq.${rider.id},final_mile_rider_id.eq.${rider.id},first_mile_pickup_agent_id.eq.${rider.id}`)
-            .in('dispatch_stage', ['awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
+            .in('dispatch_stage', ['awaiting_rider_acceptance', 'awaiting_source_terminal', 'awaiting_final_mile_rider', 'out_for_delivery'])
             .order('updated_at', { ascending: false })
             .limit(1)
             .maybeSingle();
