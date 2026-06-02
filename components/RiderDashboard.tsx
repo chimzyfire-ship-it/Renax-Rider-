@@ -10,13 +10,15 @@ import JobHistoryScreen from './rider/JobHistoryScreen';
 import ProfileScreen from './rider/ProfileScreen';
 import HelpScreen from './rider/HelpScreen';
 import TerminalTasksScreen from './rider/TerminalTasksScreen';
-import { Home, Briefcase, ClipboardList, User, HelpCircle, Warehouse } from 'lucide-react-native';
+import DeliverAndEarnScreen from './rider/DeliverAndEarnScreen';
+import { Home, Briefcase, ClipboardList, User, HelpCircle, Warehouse, Car } from 'lucide-react-native';
 import { supabase } from '../supabase';
 import { normalizeLogisticsRoles } from '../utils/logisticsRoles';
 
 const TABS = [
   { key: 'home',    Icon: Home,          label: 'Home' },
   { key: 'job',     Icon: Briefcase,     label: 'Active Job' },
+  { key: 'deliver_earn', Icon: Car,      label: 'Deliver & Earn' },
   { key: 'terminals', Icon: Warehouse,   label: 'Terminals' },
   { key: 'history', Icon: ClipboardList, label: 'History' },
   { key: 'profile', Icon: User,          label: 'Profile' },
@@ -207,6 +209,8 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
         return activeJob
           ? <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} onJobCancelled={handleJobCancelled} />
           : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
+      case 'deliver_earn':
+        return <DeliverAndEarnScreen rider={riderProfile} />;
       case 'terminals':
         return <TerminalTasksScreen rider={riderProfile} onOpenJob={(job: any) => { setActiveJob(job); setActiveTab('job'); }} />;
       case 'history':
