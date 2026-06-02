@@ -448,13 +448,15 @@ export async function verifyShipmentStageSecure(params: {
 }): Promise<any> {
   const { shipmentId, stage, locationName, notes, otp, proofs = [] } = params;
 
-  const { data, error } = await supabase.rpc('verify_and_advance_shipment_stage', {
-    p_shipment_id: shipmentId,
-    p_target_stage: stage,
-    p_location_name: locationName ?? null,
-    p_notes: notes ?? null,
-    p_otp: otp ?? null,
-    p_proofs: proofs,
+  const { data, error } = await supabase.rpc('rider_update_shipment_stage', {
+    p_payload: {
+      shipment_id: shipmentId,
+      target_stage: stage,
+      location_name: locationName ?? null,
+      notes: notes ?? null,
+      otp: otp ?? null,
+      proofs,
+    },
   });
 
   if (error) throw error;
@@ -507,6 +509,22 @@ export async function updateShipmentStageWithProof(params: {
   const proofSummary = summarizeProofs(proofs);
   const proofScore = deriveStageTrustScore(proofs);
   const verifiedAtColumn = STAGE_VERIFIED_AT_COLUMNS[stage];
+
+  if (['rider', 'driver'].includes((actorRole || '').toLowerCase())) {
+    const { error } = await supabase.rpc('rider_update_shipment_stage', {
+      p_payload: {
+        shipment_id: shipmentId,
+        target_stage: stage,
+        location_name: locationName ?? null,
+        notes: notes ?? null,
+        proofs,
+      },
+    });
+
+    if (error) throw error;
+    return;
+  }
+
   const patch: Record<string, any> = {
     dispatch_stage: stage,
     status: shipmentStatusFromStage(stage, routingMode),

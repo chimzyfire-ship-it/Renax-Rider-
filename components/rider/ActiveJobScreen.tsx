@@ -9,7 +9,7 @@ import { Navigation, CheckCircle2, Package, MapPin, Inbox, ShieldCheck, Camera a
 import * as ImagePicker from 'expo-image-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { publishLocation } from '../../utils/locationPublisher';
-import { recordShipmentQrScanFailure, shipmentStatusFromStage, stageLabel, updateShipmentStageWithProof, verifyShipmentStageSecure } from '../../utils/routingService';
+import { recordShipmentQrScanFailure, stageLabel, updateShipmentStageWithProof, verifyShipmentStageSecure } from '../../utils/routingService';
 import { parseRenaxQrPayload, uploadShipmentProofPhoto } from '../../utils/proofMedia';
 import { enqueue, registerDrainWorker, queueSize } from '../../utils/offlineQueue';
 import { supabase } from '../../supabase';
@@ -448,73 +448,25 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
 
     const isFirstMileAssignment = job?.routing_mode === 'relay_terminal' && job?.first_mile_pickup_agent_id === rider?.id;
     const isFinalMileAssignment = job?.routing_mode === 'relay_terminal' && job?.final_mile_rider_id === rider?.id;
-    const releaseStage = isFinalMileAssignment ? 'awaiting_final_mile_rider' : 'awaiting_rider_acceptance';
-    const releasePatch: Record<string, any> = {
-      dispatch_stage: releaseStage,
-      status: shipmentStatusFromStage(releaseStage, job?.routing_mode || 'last_mile_local'),
-      updated_at: new Date().toISOString(),
-    };
-
-    if (isFinalMileAssignment) {
-      releasePatch.final_mile_rider_id = null;
-    } else {
-      releasePatch.assigned_rider_id = null;
-    }
+    const assignmentType = isFirstMileAssignment ? 'first_mile' : isFinalMileAssignment ? 'final_mile' : 'local_delivery';
 
     setCancelling(true);
     setOtpError('');
 
     try {
-      if (isFirstMileAssignment) {
-        if (!job?.active_pickup_request_id) {
-          throw new Error('This pickup job is missing its queue record, so it cannot be released yet.');
-        }
-
-        const { error } = await supabase.rpc('unassign_first_mile_pickup_agent', {
-          p_payload: {
-            pickup_request_id: job.active_pickup_request_id,
-            reason: 'Assigned pickup driver released the job before pickup confirmation.',
-          },
-        });
-
-        if (error) throw error;
-      } else if (isFinalMileAssignment) {
-        const { error } = await supabase.rpc('unassign_final_mile_rider', {
-          p_payload: {
-            shipment_id: job.id,
-            reason: 'Assigned final-mile rider released the delivery before recipient handoff.',
-          },
-        });
-
-        if (error) throw error;
-      } else {
-        const { data, error } = await supabase
-          .from('shipments')
-          .update(releasePatch)
-          .eq('id', job.id)
-          .select('id')
-          .maybeSingle();
-
-        if (error) throw error;
-        if (!data) throw new Error('Could not release this job back to the queue.');
-      }
-
-      try {
-        await supabase.from('shipment_events').insert({
+      const { error } = await supabase.rpc('rider_release_shipment_assignment', {
+        p_payload: {
           shipment_id: job.id,
-          stage: isFirstMileAssignment ? (currentDispatchStage || 'awaiting_rider_acceptance') : releaseStage,
-          location_name: rider?.state || 'Route',
-          actor_id: rider?.id || null,
-          actor_role: 'rider',
-          notes: isFirstMileAssignment
+          assignment_type: assignmentType,
+          reason: isFirstMileAssignment
             ? 'Assigned first-mile pickup driver released the job before pickup confirmation.'
             : isFinalMileAssignment
               ? 'Assigned final-mile rider released the delivery before recipient handoff.'
-            : 'Rider cancelled accepted job before pickup confirmation.',
-        });
-      } catch (eventError) {
-        console.error('Unable to log rider cancellation event', eventError);
-      }
+              : 'Rider cancelled accepted job before pickup confirmation.',
+        },
+      });
+
+      if (error) throw error;
 
       try {
         if (rider?.id) {
@@ -533,7 +485,7 @@ export default function ActiveJobScreen({ job, rider, onJobComplete, onJobCancel
     } catch (error: any) {
       setOtpError(error?.message || 'Could not cancel this job right now.');
       if (Platform.OS === 'web') {
-        alert(`[RENAX DEBUG] Job cancellation failed:\n${error?.message || String(error)}\n\nCode: ${error?.code || 'none'}\nDetails: ${error?.details || 'none'}\nHint: ${error?.hint || 'none'}\n\nShipment ID: ${job.id}\nRider ID: ${rider?.id || 'none'}\nPatch: ${JSON.stringify(releasePatch)}`);
+        alert(`[RENAX DEBUG] Job cancellation failed:\n${error?.message || String(error)}\n\nCode: ${error?.code || 'none'}\nDetails: ${error?.details || 'none'}\nHint: ${error?.hint || 'none'}\n\nShipment ID: ${job.id}\nRider ID: ${rider?.id || 'none'}\nAssignment: ${assignmentType}`);
       }
     } finally {
       setCancelling(false);
