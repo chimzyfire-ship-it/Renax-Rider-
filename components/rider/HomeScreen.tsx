@@ -18,7 +18,7 @@ import {
 } from 'lucide-react-native';
 import { supabase } from '../../supabase';
 import { publishLocation, startLocationUpdates, stopLocationUpdates } from '../../utils/locationPublisher';
-import { shipmentStatusFromStage, stageLabel } from '../../utils/routingService';
+import { stageLabel } from '../../utils/routingService';
 import { hasLogisticsRole, normalizeLogisticsRoles } from '../../utils/logisticsRoles';
 
 const PulseRing = ({ isOnline }: { isOnline: boolean }) => {
@@ -600,65 +600,39 @@ export default function HomeScreen({
 
     const jobSnapshot = { ...currentJob };
 
-    const patch: Record<string, any> = {
-      updated_at: new Date().toISOString(),
-    };
-
-    if (jobSnapshot.routing_mode === 'relay_terminal') {
-      patch.assigned_rider_id = rider?.id || null;
-      patch.dispatch_stage = 'awaiting_source_terminal';
-      patch.status = shipmentStatusFromStage('awaiting_source_terminal', jobSnapshot.routing_mode || 'relay_terminal');
-    } else {
-      patch.assigned_rider_id = rider?.id || null;
-      patch.dispatch_stage = 'out_for_delivery';
-      patch.status = shipmentStatusFromStage('out_for_delivery', jobSnapshot.routing_mode || 'last_mile_local');
-    }
+    const assignmentType = jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider'
+      ? 'final_mile'
+      : 'local_delivery';
 
     try {
       try { await supabase.auth.refreshSession(); } catch {}
 
-      if (jobSnapshot.dispatch_stage === 'awaiting_final_mile_rider') {
-        const { error: claimError } = await supabase.rpc('claim_final_mile_delivery_job', {
-          p_payload: {
-            shipment_id: jobSnapshot.id,
-            reason: 'Rider accepted a destination-terminal final-mile dispatch job.',
-          },
-        });
+      const { error: claimError } = await supabase.rpc('rider_claim_shipment_assignment', {
+        p_payload: {
+          shipment_id: jobSnapshot.id,
+          assignment_type: assignmentType,
+          reason: assignmentType === 'final_mile'
+            ? 'Rider accepted a destination-terminal final-mile dispatch job.'
+            : 'Rider accepted a local delivery marketplace job.',
+        },
+      });
 
-        if (claimError) throw claimError;
+      if (claimError) throw claimError;
 
-        const { data: updatedShipment, error: shipmentError } = await supabase
-          .from('shipments')
-          .select('*')
-          .eq('id', jobSnapshot.id)
-          .maybeSingle();
-
-        if (shipmentError) throw shipmentError;
-        if (!updatedShipment) {
-          throw new Error('Could not confirm this final-mile assignment. Please try again.');
-        }
-
-        onAcceptJob?.({ ...jobSnapshot, ...updatedShipment });
-        setCurrentJob(null);
-        isAcceptingRef.current = false;
-        return;
-      }
-
-      const { data: updatedShipment, error } = await supabase
+      const { data: updatedShipment, error: shipmentError } = await supabase
         .from('shipments')
-        .update(patch)
+        .select('*')
         .eq('id', jobSnapshot.id)
-        .select('id, dispatch_stage, assigned_rider_id, final_mile_rider_id, status, updated_at')
         .maybeSingle();
 
-      if (error) {
-        throw error;
+      if (shipmentError) {
+        throw shipmentError;
       }
       if (!updatedShipment) {
         throw new Error('Could not confirm this job assignment. Please try again.');
       }
 
-      onAcceptJob?.({ ...jobSnapshot, ...patch, ...updatedShipment });
+      onAcceptJob?.({ ...jobSnapshot, ...updatedShipment });
       setCurrentJob(null);
       isAcceptingRef.current = false;
     } catch (err: any) {
@@ -668,12 +642,12 @@ export default function HomeScreen({
       setJobTimer(60);
       isAcceptingRef.current = false;
       if (Platform.OS === 'web') {
-        alert(`[RENAX DEBUG] Job acceptance failed:\n${err?.message || String(err)}\n\nCode: ${err?.code || 'none'}\nDetails: ${err?.details || 'none'}\nHint: ${err?.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id || 'none'}\nPatch: ${JSON.stringify(patch)}`);
+        alert(`[RENAX DEBUG] Job acceptance failed:\n${err?.message || String(err)}\n\nCode: ${err?.code || 'none'}\nDetails: ${err?.details || 'none'}\nHint: ${err?.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id || 'none'}\nAssignment Type: ${assignmentType}`);
       }
       return;
     }
 
-    // ── Background: fire-and-forget event log & location ──────────────────
+    // ── Background: fire-and-forget location heartbeat ──────────────────
     try {
       if (rider?.id) {
         publishLocation(rider.id, {
@@ -682,14 +656,6 @@ export default function HomeScreen({
           metadata: { state: rider?.state || riderState, city: rider?.city || '', vehicle: rider?.vehicle || '' },
         }).catch(() => {});
       }
-      void supabase.from('shipment_events').insert({
-        shipment_id: jobSnapshot.id,
-        stage: patch.dispatch_stage,
-        location_name: riderState,
-        actor_id: rider?.id || null,
-        actor_role: 'rider',
-        notes: 'Rider accepted delivery task.',
-      });
     } catch {}
   };
 
@@ -708,13 +674,11 @@ export default function HomeScreen({
         [declinedJob.id]: Date.now(),
       });
       try {
-        await supabase.from('shipment_events').insert({
-          shipment_id: declinedJob.id,
-          stage: declinedJob.dispatch_stage || 'awaiting_rider_acceptance',
-          location_name: riderState,
-          actor_id: rider?.id || null,
-          actor_role: 'rider',
-          notes: 'Rider declined delivery task.',
+        await supabase.rpc('rider_decline_shipment_assignment', {
+          p_payload: {
+            shipment_id: declinedJob.id,
+            reason: 'Rider declined delivery task.',
+          },
         });
       } catch (error) {
         console.error('Unable to log rider decline event', error);

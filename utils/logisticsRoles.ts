@@ -6,6 +6,7 @@ export type LogisticsRole =
   | 'first_mile_pickup'
   | 'linehaul'
   | 'final_mile'
+  | 'deliver_and_earn'
   | 'customer';
 
 const ALLOWED_LOGISTICS_ROLES: LogisticsRole[] = [
@@ -17,6 +18,7 @@ const ALLOWED_LOGISTICS_ROLES: LogisticsRole[] = [
   'first_mile_pickup',
   'linehaul',
   'final_mile',
+  'deliver_and_earn',
 ];
 
 export const RIDER_ACCOUNT_ROLE_OPTIONS = [
@@ -24,11 +26,11 @@ export const RIDER_ACCOUNT_ROLE_OPTIONS = [
   { value: 'rider', label: 'Rider' },
 ] as const;
 
-export const RIDER_LOGISTICS_ROLE_OPTIONS: Array<{
+export const RIDER_LOGISTICS_ROLE_OPTIONS: {
   value: LogisticsRole;
   label: string;
   description: string;
-}> = [
+}[] = [
   {
     value: 'rider',
     label: 'Intra-State',
@@ -43,6 +45,11 @@ export const RIDER_LOGISTICS_ROLE_OPTIONS: Array<{
     value: 'linehaul',
     label: 'Linehaul',
     description: 'Interstate terminal-to-terminal transport.',
+  },
+  {
+    value: 'deliver_and_earn',
+    label: 'Deliver & Earn',
+    description: 'Personal-car intra-state jobs after RENAX validation.',
   },
   {
     value: 'final_mile',
