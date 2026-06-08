@@ -63,65 +63,93 @@ export type DeliverAndEarnSnapshot = {
   pendingBalance: number;
 };
 
+type DeliverAndEarnWalletSummary = {
+  available_balance: number;
+  pending_balance: number;
+  payout_requested_balance: number;
+};
+
+const SNAPSHOT_QUERY_TIMEOUT_MS = 6000;
+
+async function safeSnapshotQuery<T>(label: string, queryFn: () => PromiseLike<{ data: T | null; error: any }>): Promise<T | null> {
+  try {
+    const timeoutResult = new Promise<{ data: T | null; error: any }>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          data: null,
+          error: new Error(`${label} query timed out after ${SNAPSHOT_QUERY_TIMEOUT_MS / 1000} seconds`),
+        });
+      }, SNAPSHOT_QUERY_TIMEOUT_MS);
+    });
+
+    const { data, error } = await Promise.race([queryFn(), timeoutResult]);
+    if (error) {
+      console.warn(`[DeliverAndEarnRider] ${label} query error:`, error.message || error);
+      return null;
+    }
+    return data;
+  } catch (error) {
+    console.warn(`[DeliverAndEarnRider] ${label} query threw:`, error);
+    return null;
+  }
+}
+
 export async function fetchDeliverAndEarnSnapshot(operatorId: string): Promise<DeliverAndEarnSnapshot> {
-  const [profileResult, vehiclesResult, availabilityResult, offersResult, shipmentResult, earningsResult] = await Promise.all([
-    supabase
+  const [profile, vehicles, availability, offers, activeShipment, walletSummary] = await Promise.all([
+    safeSnapshotQuery<DeliverAndEarnProfile>('profile', () =>
+      supabase
       .from('deliver_and_earn_profiles')
       .select('*')
       .eq('profile_id', operatorId)
-      .maybeSingle(),
-    supabase
+      .maybeSingle()
+    ),
+    safeSnapshotQuery<DeliverAndEarnVehicle[]>('vehicles', () =>
+      supabase
       .from('deliver_and_earn_vehicles')
       .select('*')
       .eq('operator_id', operatorId)
-      .order('updated_at', { ascending: false }),
-    supabase
+      .order('updated_at', { ascending: false })
+      .limit(5)
+    ),
+    safeSnapshotQuery<{ is_online: boolean; current_shipment_id: string | null; vehicle_id: string | null }>('availability', () =>
+      supabase
       .from('deliver_and_earn_availability')
       .select('is_online, current_shipment_id, vehicle_id')
       .eq('operator_id', operatorId)
-      .maybeSingle(),
-    supabase
+      .maybeSingle()
+    ),
+    safeSnapshotQuery<DeliverAndEarnOffer[]>('offers', () =>
+      supabase
       .from('deliver_and_earn_job_offers')
       .select('*, shipments(tracking_id, pickup_address, delivery_address, package_category, estimated_price, carrier_commission_amount)')
       .eq('operator_id', operatorId)
       .eq('offer_status', 'offered')
       .order('created_at', { ascending: false })
-      .limit(10),
-    supabase
+      .limit(10)
+    ),
+    safeSnapshotQuery<DeliverAndEarnShipment>('active_shipment', () =>
+      supabase
       .from('shipments')
       .select('id, tracking_id, pickup_address, delivery_address, package_category, dispatch_stage, status, carrier_commission_amount, pickup_verified_at, delivery_verified_at')
       .eq('deliver_and_earn_operator_id', operatorId)
       .in('dispatch_stage', ['out_for_delivery'])
       .order('updated_at', { ascending: false })
       .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('deliver_and_earn_earnings_ledger')
-      .select('operator_amount, status')
-      .eq('operator_id', operatorId),
+      .maybeSingle()
+    ),
+    safeSnapshotQuery<DeliverAndEarnWalletSummary>('wallet_summary', () =>
+      supabase.rpc('deliver_and_earn_wallet_summary', { p_operator_id: operatorId }).maybeSingle()
+    ),
   ]);
 
-  if (profileResult.error) throw profileResult.error;
-  if (vehiclesResult.error) throw vehiclesResult.error;
-  if (availabilityResult.error) throw availabilityResult.error;
-  if (offersResult.error) throw offersResult.error;
-  if (shipmentResult.error) throw shipmentResult.error;
-  if (earningsResult.error) throw earningsResult.error;
-
-  const earnings = ((earningsResult.data as { operator_amount: number; status: string }[] | null) ?? []);
-
   return {
-    profile: (profileResult.data as DeliverAndEarnProfile | null) ?? null,
-    vehicles: (vehiclesResult.data as DeliverAndEarnVehicle[] | null) ?? [],
-    availability: (availabilityResult.data as { is_online: boolean; current_shipment_id: string | null; vehicle_id: string | null } | null) ?? null,
-    offers: (offersResult.data as DeliverAndEarnOffer[] | null) ?? [],
-    activeShipment: (shipmentResult.data as DeliverAndEarnShipment | null) ?? null,
-    availableBalance: earnings
-      .filter((earning) => earning.status === 'available')
-      .reduce((total, earning) => total + Number(earning.operator_amount || 0), 0),
-    pendingBalance: earnings
-      .filter((earning) => ['pending_delivery', 'pending_dispute_window'].includes(earning.status))
-      .reduce((total, earning) => total + Number(earning.operator_amount || 0), 0),
+    profile: profile ?? null,
+    vehicles: vehicles ?? [],
+    availability: availability ?? null,
+    offers: offers ?? [],
+    activeShipment: activeShipment ?? null,
+    availableBalance: Number(walletSummary?.available_balance || 0),
+    pendingBalance: Number(walletSummary?.pending_balance || 0) + Number(walletSummary?.payout_requested_balance || 0),
   };
 }
 
