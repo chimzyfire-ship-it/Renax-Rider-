@@ -20,6 +20,8 @@ const formatAmount = (amount: number | null | undefined) =>
 const statusLabel = (value?: string | null) =>
   value ? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()) : 'Not Started';
 
+const SNAPSHOT_LOAD_TIMEOUT_MS = 10000;
+
 export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string | null; name?: string } | null }) {
   const operatorId = rider?.id || null;
   const [snapshot, setSnapshot] = useState<DeliverAndEarnSnapshot | null>(null);
@@ -33,12 +35,17 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
     if (!operatorId) return;
     setLoading(true);
     try {
-      const data = await fetchDeliverAndEarnSnapshot(operatorId);
+      const data = await Promise.race([
+        fetchDeliverAndEarnSnapshot(operatorId),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Deliver & Earn data load timed out. Pull refresh again or check your connection.')), SNAPSHOT_LOAD_TIMEOUT_MS);
+        }),
+      ]);
       setSnapshot(data);
       setMessage('');
     } catch (error) {
       console.error('Failed to load Deliver & Earn rider data', error);
-      setMessage('Deliver & Earn is not ready on this backend yet.');
+      setMessage(error instanceof Error ? error.message : 'Deliver & Earn is not ready on this backend yet.');
     } finally {
       setLoading(false);
     }
@@ -143,7 +150,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
     }
   };
 
-  if (loading) {
+  if (loading && !snapshot) {
     return (
       <View style={styles.root}>
         <LinearGradient colors={['#020f09', '#041910']} style={StyleSheet.absoluteFillObject as any} />
