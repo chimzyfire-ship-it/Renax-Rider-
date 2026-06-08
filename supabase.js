@@ -6,7 +6,7 @@ import 'react-native-url-polyfill/auto';
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://egmebwctchuwabbnvmgc.supabase.co';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbWVid2N0Y2h1d2FiYm52bWdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NDg0MjgsImV4cCI6MjA5MjAyNDQyOH0.eBLgER9lm2G6Ykvqz0Lyod9h3PIDJi3LsLXCU2qpOd0';
 
-const storage = Platform.OS === 'web' && typeof window === 'undefined'
+const storage = Platform.OS === 'web'
   ? undefined
   : AsyncStorage;
 
