@@ -5,12 +5,13 @@ import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } f
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { User, Bike, Hash, Phone, LogOut, Check, MapPin } from 'lucide-react-native';
+import { User, Bike, Hash, Phone, LogOut, Check, MapPin, ShieldCheck } from 'lucide-react-native';
 import {
   deriveAccountRole,
   normalizeLogisticsRoles,
   RIDER_ACCOUNT_ROLE_OPTIONS,
   RIDER_LOGISTICS_ROLE_OPTIONS,
+  type LogisticsRole,
 } from '../../utils/logisticsRoles';
 import { fetchTerminals } from '../../utils/routingService';
 
@@ -43,9 +44,10 @@ type ProfileScreenProps = {
     logisticsRoles: string[];
     preferredTerminalCode: string;
   }) => Promise<void> | void;
+  lockedToDeliverAndEarn?: boolean;
 };
 
-export default function ProfileScreen({ rider, onLogout, onSaveProfile }: ProfileScreenProps) {
+export default function ProfileScreen({ rider, onLogout, onSaveProfile, lockedToDeliverAndEarn = false }: ProfileScreenProps) {
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_8: PlusJakartaSans_800ExtraBold,
     PlusJakartaSans_6: PlusJakartaSans_600SemiBold,
@@ -89,9 +91,13 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
   if (!fontsLoaded) return null;
 
   const handleSave = async () => {
-    const normalizedRoles = normalizeLogisticsRoles(logisticsRoles, accountRole);
+    const normalizedRoles: LogisticsRole[] = lockedToDeliverAndEarn
+      ? ['deliver_and_earn']
+      : normalizeLogisticsRoles(logisticsRoles, accountRole);
     const resolvedPreferredTerminalCode =
-      preferredTerminalCode
+      lockedToDeliverAndEarn
+      ? (rider?.preferredTerminalCode || rider?.terminalCode || '')
+      : preferredTerminalCode
       || matchingTerminals[0]?.code
       || rider?.preferredTerminalCode
       || rider?.terminalCode
@@ -103,7 +109,7 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
       vehicle,
       state,
       city,
-      role: deriveAccountRole(normalizedRoles, accountRole),
+      role: lockedToDeliverAndEarn ? 'customer' : deriveAccountRole(normalizedRoles, accountRole),
       logisticsRoles: normalizedRoles,
       preferredTerminalCode: resolvedPreferredTerminalCode,
     });
@@ -113,6 +119,7 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
   };
 
   const toggleLogisticsRole = (value: string) => {
+    if (lockedToDeliverAndEarn) return;
     setLogisticsRoles((current) => (
       current.includes(value)
         ? current.filter((item) => item !== value)
@@ -137,8 +144,12 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
           </View>
           <Text style={styles.avatarName}>{name || 'Rider'}</Text>
           <View style={styles.riderBadge}>
-            <Bike color="#ccfd3a" size={14} strokeWidth={1.8} />
-            <Text style={styles.riderBadgeText}>RENAX RIDER</Text>
+            {lockedToDeliverAndEarn ? (
+              <ShieldCheck color="#ccfd3a" size={14} strokeWidth={1.8} />
+            ) : (
+              <Bike color="#ccfd3a" size={14} strokeWidth={1.8} />
+            )}
+            <Text style={styles.riderBadgeText}>{lockedToDeliverAndEarn ? 'DELIVER & EARN' : 'RENAX RIDER'}</Text>
           </View>
         </Animated.View>
 
@@ -147,7 +158,7 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
           <View style={styles.fieldGroup}>
             <View style={styles.fieldIconWrap}><Hash color="#ccfd3a" size={18} /></View>
             <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Staff ID</Text>
+              <Text style={styles.fieldLabel}>{lockedToDeliverAndEarn ? 'Account ID' : 'Staff ID'}</Text>
               <Text style={styles.fieldReadOnly}>{rider?.id || 'Will appear after registration'}</Text>
             </View>
           </View>
@@ -155,10 +166,16 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
           <View style={styles.fieldGroup}>
             <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
             <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Assigned Hub</Text>
-              <Text style={styles.fieldReadOnly}>{rider?.assignedTerminalName || 'Not assigned by ops yet'}</Text>
+              <Text style={styles.fieldLabel}>{lockedToDeliverAndEarn ? 'Operating Area' : 'Assigned Hub'}</Text>
+              <Text style={styles.fieldReadOnly}>
+                {lockedToDeliverAndEarn
+                  ? `${state || 'State pending'}, ${city || 'City pending'}`
+                  : rider?.assignedTerminalName || 'Not assigned by ops yet'}
+              </Text>
               <Text style={styles.helperText}>
-                {rider?.assignedTerminalAddress || 'Your live hub remains stable even if you update your operating state or city.'}
+                {lockedToDeliverAndEarn
+                  ? 'This operating area comes from the approved Deliver & Earn application.'
+                  : rider?.assignedTerminalAddress || 'Your live hub remains stable even if you update your operating state or city.'}
               </Text>
             </View>
           </View>
@@ -187,61 +204,77 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
             </View>
           </View>
 
-          {/* Plate */}
-          <View style={styles.fieldGroup}>
-            <View style={styles.fieldIconWrap}><Hash color="#ccfd3a" size={18} /></View>
-            <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Plate Number</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={plate}
-                onChangeText={setPlate}
-                placeholder="e.g. LGA-123-XY"
-                placeholderTextColor="#3a5c47"
-                autoCapitalize="characters"
-              />
-            </View>
-          </View>
-
-          <View style={styles.fieldGroup}>
-            <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
-            <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Preferred Hub</Text>
-              <View style={styles.roleChipRow}>
-                {(matchingTerminals.length > 0 ? matchingTerminals : terminals.slice(0, 6)).map((terminal) => {
-                  const active = preferredTerminalCode === terminal.code;
-                  return (
-                    <Pressable
-                      key={terminal.id}
-                      style={[styles.roleChip, active && styles.roleChipActive]}
-                      onPress={() => setPreferredTerminalCode(terminal.code)}
-                    >
-                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
-                        {terminal.code} • {terminal.city}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+          {lockedToDeliverAndEarn ? (
+            <View style={styles.fieldGroup}>
+              <View style={styles.fieldIconWrap}><ShieldCheck color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Access Mode</Text>
+                <Text style={styles.fieldReadOnly}>Deliver & Earn only</Text>
+                <Text style={styles.helperText}>Staff rider jobs, terminal tools, and internal role controls are hidden for this account.</Text>
               </View>
-              <Text style={styles.helperText}>
-                {preferredTerminalCode
-                  ? `Preferred hub saved as ${preferredTerminalCode}.`
-                  : 'Choose the terminal this account should stay linked to by default.'}
-              </Text>
             </View>
-          </View>
+          ) : (
+            <View style={styles.fieldGroup}>
+              <View style={styles.fieldIconWrap}><Hash color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Plate Number</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={plate}
+                  onChangeText={setPlate}
+                  placeholder="e.g. LGA-123-XY"
+                  placeholderTextColor="#3a5c47"
+                  autoCapitalize="characters"
+                />
+              </View>
+            </View>
+          )}
+
+          {!lockedToDeliverAndEarn ? (
+            <View style={styles.fieldGroup}>
+              <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Preferred Hub</Text>
+                <View style={styles.roleChipRow}>
+                  {(matchingTerminals.length > 0 ? matchingTerminals : terminals.slice(0, 6)).map((terminal) => {
+                    const active = preferredTerminalCode === terminal.code;
+                    return (
+                      <Pressable
+                        key={terminal.id}
+                        style={[styles.roleChip, active && styles.roleChipActive]}
+                        onPress={() => setPreferredTerminalCode(terminal.code)}
+                      >
+                        <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                          {terminal.code} • {terminal.city}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.helperText}>
+                  {preferredTerminalCode
+                    ? `Preferred hub saved as ${preferredTerminalCode}.`
+                    : 'Choose the terminal this account should stay linked to by default.'}
+                </Text>
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.fieldGroup}>
             <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
             <View style={styles.fieldContent}>
               <Text style={styles.fieldLabel}>Operating State</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={state}
-                onChangeText={setState}
-                placeholder="Lagos"
-                placeholderTextColor="#3a5c47"
-              />
+              {lockedToDeliverAndEarn ? (
+                <Text style={styles.fieldReadOnly}>{state || 'State pending'}</Text>
+              ) : (
+                <TextInput
+                  style={styles.fieldInput}
+                  value={state}
+                  onChangeText={setState}
+                  placeholder="Lagos"
+                  placeholderTextColor="#3a5c47"
+                />
+              )}
             </View>
           </View>
 
@@ -249,78 +282,87 @@ export default function ProfileScreen({ rider, onLogout, onSaveProfile }: Profil
             <View style={styles.fieldIconWrap}><MapPin color="#ccfd3a" size={18} /></View>
             <View style={styles.fieldContent}>
               <Text style={styles.fieldLabel}>Operating City</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={city}
-                onChangeText={setCity}
-                placeholder="Ikeja"
-                placeholderTextColor="#3a5c47"
-              />
+              {lockedToDeliverAndEarn ? (
+                <Text style={styles.fieldReadOnly}>{city || 'City pending'}</Text>
+              ) : (
+                <TextInput
+                  style={styles.fieldInput}
+                  value={city}
+                  onChangeText={setCity}
+                  placeholder="Ikeja"
+                  placeholderTextColor="#3a5c47"
+                />
+              )}
             </View>
           </View>
 
-          <View style={styles.fieldGroup}>
-            <View style={styles.fieldIconWrap}><User color="#ccfd3a" size={18} /></View>
-            <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Account Role</Text>
-              <View style={styles.roleChipRow}>
-                {RIDER_ACCOUNT_ROLE_OPTIONS.map((option) => {
-                  const active = accountRole === option.value;
-                  return (
+          {!lockedToDeliverAndEarn ? (
+            <View style={styles.fieldGroup}>
+              <View style={styles.fieldIconWrap}><User color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Account Role</Text>
+                <View style={styles.roleChipRow}>
+                  {RIDER_ACCOUNT_ROLE_OPTIONS.map((option) => {
+                    const active = accountRole === option.value;
+                    return (
+                      <Pressable
+                        key={option.value}
+                        style={[styles.roleChip, active && styles.roleChipActive]}
+                        onPress={() => setAccountRole(option.value)}
+                      >
+                        <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>{option.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          ) : null}
+
+          {!lockedToDeliverAndEarn ? (
+            <View style={styles.vehicleSection}>
+              <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Logistics Roles</Text>
+                <View style={styles.logisticsGrid}>
+                  {RIDER_LOGISTICS_ROLE_OPTIONS.map((option) => {
+                    const active = logisticsRoles.includes(option.value);
+                    return (
+                      <Pressable
+                        key={option.value}
+                        style={[styles.logisticsCard, active && styles.logisticsCardActive]}
+                        onPress={() => toggleLogisticsRole(option.value)}
+                      >
+                        <Text style={[styles.logisticsCardTitle, active && styles.logisticsCardTitleActive]}>{option.label}</Text>
+                        <Text style={[styles.logisticsCardSub, active && styles.logisticsCardSubActive]}>{option.description}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          ) : null}
+
+          {!lockedToDeliverAndEarn ? (
+            <View style={styles.vehicleSection}>
+              <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
+              <View style={styles.fieldContent}>
+                <Text style={styles.fieldLabel}>Vehicle Type</Text>
+                <View style={styles.vehicleGrid}>
+                  {VEHICLE_TYPES.map(v => (
                     <Pressable
-                      key={option.value}
-                      style={[styles.roleChip, active && styles.roleChipActive]}
-                      onPress={() => setAccountRole(option.value)}
+                      key={v}
+                      style={[styles.vehicleChip, vehicle === v && styles.vehicleChipActive]}
+                      onPress={() => setVehicle(v)}
                     >
-                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>{option.label}</Text>
+                      {vehicle === v && <Check color="#002B22" size={14} />}
+                      <Text style={[styles.vehicleChipText, vehicle === v && { color: '#002B22' }]}>{v}</Text>
                     </Pressable>
-                  );
-                })}
+                  ))}
+                </View>
               </View>
             </View>
-          </View>
-
-          <View style={styles.vehicleSection}>
-            <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
-            <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Logistics Roles</Text>
-              <View style={styles.logisticsGrid}>
-                {RIDER_LOGISTICS_ROLE_OPTIONS.map((option) => {
-                  const active = logisticsRoles.includes(option.value);
-                  return (
-                    <Pressable
-                      key={option.value}
-                      style={[styles.logisticsCard, active && styles.logisticsCardActive]}
-                      onPress={() => toggleLogisticsRole(option.value)}
-                    >
-                      <Text style={[styles.logisticsCardTitle, active && styles.logisticsCardTitleActive]}>{option.label}</Text>
-                      <Text style={[styles.logisticsCardSub, active && styles.logisticsCardSubActive]}>{option.description}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
-
-          {/* Vehicle Type */}
-          <View style={styles.vehicleSection}>
-            <View style={styles.fieldIconWrap}><Bike color="#ccfd3a" size={18} /></View>
-            <View style={styles.fieldContent}>
-              <Text style={styles.fieldLabel}>Vehicle Type</Text>
-              <View style={styles.vehicleGrid}>
-                {VEHICLE_TYPES.map(v => (
-                  <Pressable
-                    key={v}
-                    style={[styles.vehicleChip, vehicle === v && styles.vehicleChipActive]}
-                    onPress={() => setVehicle(v)}
-                  >
-                    {vehicle === v && <Check color="#002B22" size={14} />}
-                    <Text style={[styles.vehicleChipText, vehicle === v && { color: '#002B22' }]}>{v}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          </View>
+          ) : null}
         </Animated.View>
 
         {/* Save Button */}

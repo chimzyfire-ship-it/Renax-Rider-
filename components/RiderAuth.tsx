@@ -7,7 +7,7 @@ import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_600SemiBold } f
 import { Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { ArrowRight, Mail, Lock, User, Phone } from 'lucide-react-native';
+import { ArrowRight, Mail, Lock, User, Phone, ShieldCheck } from 'lucide-react-native';
 import { supabase } from '../supabase';
 import { fetchTerminals } from '../utils/routingService';
 import {
@@ -19,9 +19,17 @@ import {
 
 type RiderAuthProps = {
   onAuthenticated?: () => void;
+  pendingDeliverEarnInviteToken?: string | null;
+  authMessage?: string;
+  onPendingDeliverEarnInviteCode?: (inviteCode: string | null) => void;
 };
 
-export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
+export default function RiderAuth({
+  onAuthenticated,
+  pendingDeliverEarnInviteToken,
+  authMessage,
+  onPendingDeliverEarnInviteCode,
+}: RiderAuthProps) {
   const { width } = useWindowDimensions();
   const isCompact = width < 480;
   const [fontsLoaded] = useFonts({
@@ -35,6 +43,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [deliverEarnInviteCode, setDeliverEarnInviteCode] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [stateValue, setStateValue] = useState('Lagos');
@@ -70,6 +79,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
 
     setLoading(true);
     setMessage('');
+    onPendingDeliverEarnInviteCode?.(deliverEarnInviteCode.trim() || null);
 
     try {
       const { error } = await supabase.auth.signInWithPassword({
@@ -80,6 +90,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
       if (error) throw error;
       onAuthenticated?.();
     } catch (error: any) {
+      onPendingDeliverEarnInviteCode?.(null);
       setMessage(error?.message || 'Could not sign in.');
     } finally {
       setLoading(false);
@@ -188,7 +199,11 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
               <>
                 <Mail color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
                 <Text style={styles.cardTitle}>Rider Sign In</Text>
-                <Text style={styles.cardSub}>Use your rider email and password. Phone OTP will come later when SMS auth is connected.</Text>
+                <Text style={styles.cardSub}>
+                  {pendingDeliverEarnInviteToken
+                    ? 'Sign in with the same RENAX account approved for Deliver & Earn. This invite opens the Rider app in Deliver & Earn mode only.'
+                    : 'Use your rider email and password. Phone OTP will come later when SMS auth is connected.'}
+                </Text>
 
                 <View style={styles.inputWrap}>
                   <Mail color="#6B7280" size={16} />
@@ -215,6 +230,20 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
                   />
                 </View>
 
+                {!pendingDeliverEarnInviteToken ? (
+                  <View style={styles.inputWrap}>
+                    <ShieldCheck color="#6B7280" size={16} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Deliver & Earn invite code, if issued"
+                      placeholderTextColor="#3a5c47"
+                      autoCapitalize="characters"
+                      value={deliverEarnInviteCode}
+                      onChangeText={setDeliverEarnInviteCode}
+                    />
+                  </View>
+                ) : null}
+
                 <Pressable
                   style={[styles.bigBtn, loading && { opacity: 0.6 }]}
                   onPress={signIn}
@@ -228,7 +257,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
               <>
                 <User color="#ccfd3a" size={36} style={{ marginBottom: 16 }} />
                 <Text style={styles.cardTitle}>Create Logistics Staff Account</Text>
-                <Text style={styles.cardSub}>Register the actual rider or driver profile now so ops can use state and logistics roles when dispatching work.</Text>
+                <Text style={styles.cardSub}>This creates RENAX staff rider/driver access. Deliver & Earn applicants should sign in with their approved RENAX customer account and invite instead.</Text>
 
                 <View style={styles.inputWrap}>
                   <User color="#6B7280" size={16} />
@@ -377,6 +406,7 @@ export default function RiderAuth({ onAuthenticated }: RiderAuthProps) {
               </>
             )}
 
+            {authMessage ? <Text style={styles.message}>{authMessage}</Text> : null}
             {message ? <Text style={styles.message}>{message}</Text> : null}
           </Animated.View>
 
