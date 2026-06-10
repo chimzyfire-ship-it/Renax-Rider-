@@ -25,6 +25,12 @@ const TABS = [
   { key: 'help',    Icon: HelpCircle,    label: 'Help' },
 ];
 
+const DELIVER_AND_EARN_TABS = [
+  { key: 'deliver_earn', Icon: Car, label: 'Deliver & Earn' },
+  { key: 'profile', Icon: User, label: 'Profile' },
+  { key: 'help', Icon: HelpCircle, label: 'Help' },
+];
+
 const dashboardStateKey = (riderId?: string | null) => `renax:rider-dashboard:${riderId || 'demo'}`;
 
 type RiderDashboardProps = {
@@ -44,6 +50,9 @@ type RiderDashboardProps = {
     assignedTerminalAddress?: string;
     vehicle?: string;
     plate?: string;
+    operatorMode?: string;
+    canUseRiderApp?: boolean;
+    isStaffOperator?: boolean;
   } | null;
   onLogout?: () => void;
 };
@@ -53,6 +62,10 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
   const isWebWide = Platform.OS === 'web' && width >= 768;
   const [activeTab, setActiveTab] = useState('home');
   const [activeJob, setActiveJob] = useState<any>(null);
+  const isDeliverAndEarnOnly =
+    rider?.operatorMode === 'deliver_and_earn'
+    && !rider?.isStaffOperator;
+  const visibleTabs = isDeliverAndEarnOnly ? DELIVER_AND_EARN_TABS : TABS;
   const defaultProfile = useMemo(() => ({
     ...rider,
     state: rider?.state || 'Lagos',
@@ -66,6 +79,9 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
     assignedTerminalAddress: rider?.assignedTerminalAddress || '',
     vehicle: rider?.vehicle || 'Motorcycle',
     plate: rider?.plate || 'LGA-123-XY',
+    operatorMode: rider?.operatorMode || 'renax_staff',
+    canUseRiderApp: rider?.canUseRiderApp ?? true,
+    isStaffOperator: Boolean(rider?.isStaffOperator),
   }), [rider]);
   const [riderProfile, setRiderProfile] = useState<any>(defaultProfile);
 
@@ -104,7 +120,7 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
         const restoredJob = parsed?.activeJob || null;
 
         let liveAssignedJob = null;
-        if (rider?.id) {
+        if (rider?.id && !isDeliverAndEarnOnly) {
           const { data } = await supabase
             .from('shipments')
             .select('*')
@@ -123,7 +139,10 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
         }
 
         setActiveJob(null);
-        if (parsed?.activeTab === 'job' && !restoredJob) {
+        if (isDeliverAndEarnOnly) {
+          const restoredTabAllowed = visibleTabs.some((tab) => tab.key === parsed?.activeTab);
+          setActiveTab(restoredTabAllowed ? parsed.activeTab : 'deliver_earn');
+        } else if (parsed?.activeTab === 'job' && !restoredJob) {
           setActiveTab('home');
         } else if (parsed?.activeTab) {
           setActiveTab(parsed.activeTab);
@@ -134,7 +153,13 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
     };
 
     loadDashboardState();
-  }, [rider?.id]);
+  }, [isDeliverAndEarnOnly, rider?.id, visibleTabs]);
+
+  useEffect(() => {
+    if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+      setActiveTab(isDeliverAndEarnOnly ? 'deliver_earn' : 'home');
+    }
+  }, [activeTab, isDeliverAndEarnOnly, visibleTabs]);
 
   useEffect(() => {
     const persistDashboardState = async () => {
@@ -158,19 +183,34 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
     const nextProfile = {
       ...riderProfile,
       ...updates,
-      logisticsRoles: normalizeLogisticsRoles(updates?.logisticsRoles ?? riderProfile?.logisticsRoles, updates?.role ?? riderProfile?.role),
+      role: isDeliverAndEarnOnly ? (riderProfile?.role || 'customer') : (updates?.role ?? riderProfile?.role),
+      logisticsRoles: isDeliverAndEarnOnly
+        ? ['deliver_and_earn']
+        : normalizeLogisticsRoles(updates?.logisticsRoles ?? riderProfile?.logisticsRoles, updates?.role ?? riderProfile?.role),
     };
     setRiderProfile(nextProfile);
     try {
       const key = `renax:rider-profile:${rider?.id || 'demo'}`;
       await AsyncStorage.setItem(key, JSON.stringify(nextProfile));
       if (rider?.id) {
+        if (isDeliverAndEarnOnly) {
+          const { error } = await supabase
+            .from('profiles')
+            .update({
+              full_name: nextProfile.name || null,
+              phone_number: riderProfile?.phone || rider?.phone || null,
+            })
+            .eq('id', rider.id);
+          if (error) throw error;
+          return;
+        }
+
         const { error } = await supabase.from('profiles').upsert({
           id: rider.id,
           email: riderProfile?.email || rider?.email || null,
           full_name: nextProfile.name || null,
           phone_number: riderProfile?.phone || rider?.phone || null,
-          role: nextProfile.role || 'driver',
+          role: nextProfile.role || (isDeliverAndEarnOnly ? 'customer' : 'driver'),
           state: nextProfile.state || 'Lagos',
           city: nextProfile.city || 'Ikeja',
           logistics_roles: nextProfile.logisticsRoles,
@@ -204,23 +244,28 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
   const renderScreen = () => {
     switch (activeTab) {
       case 'home':
+        if (isDeliverAndEarnOnly) return <DeliverAndEarnScreen rider={riderProfile} />;
         return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
       case 'job':
+        if (isDeliverAndEarnOnly) return <DeliverAndEarnScreen rider={riderProfile} />;
         return activeJob
           ? <ActiveJobScreen job={activeJob} rider={riderProfile} onJobComplete={handleJobComplete} onJobCancelled={handleJobCancelled} />
           : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
       case 'deliver_earn':
         return <DeliverAndEarnScreen rider={riderProfile} />;
       case 'terminals':
+        if (isDeliverAndEarnOnly) return <DeliverAndEarnScreen rider={riderProfile} />;
         return <TerminalTasksScreen rider={riderProfile} onOpenJob={(job: any) => { setActiveJob(job); setActiveTab('job'); }} />;
       case 'history':
         return <JobHistoryScreen rider={riderProfile} />;
       case 'profile':
-        return <ProfileScreen rider={riderProfile} onLogout={onLogout} onSaveProfile={persistProfile} />;
+        return <ProfileScreen rider={riderProfile} onLogout={onLogout} onSaveProfile={persistProfile} lockedToDeliverAndEarn={isDeliverAndEarnOnly} />;
       case 'help':
         return <HelpScreen />;
       default:
-        return <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
+        return isDeliverAndEarnOnly
+          ? <DeliverAndEarnScreen rider={riderProfile} />
+          : <HomeScreen rider={riderProfile} onAcceptJob={handleAcceptJob} activeJob={activeJob} />;
     }
   };
 
@@ -233,7 +278,7 @@ export default function RiderDashboard({ rider, onLogout }: RiderDashboardProps)
 
       {/* Bottom Tab Bar */}
       <View style={styles.tabBar}>
-        {TABS.map(({ key, Icon, label }) => {
+        {visibleTabs.map(({ key, Icon, label }) => {
           const isActive = activeTab === key;
           return (
             <View

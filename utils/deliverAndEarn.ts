@@ -63,6 +63,20 @@ export type DeliverAndEarnSnapshot = {
   pendingBalance: number;
 };
 
+export type DeliverAndEarnOperatorAccessContext = {
+  profile_id?: string;
+  operator_mode: 'signed_out' | 'none' | 'renax_staff' | 'deliver_and_earn';
+  can_use_rider_app: boolean;
+  is_staff_operator?: boolean;
+  application_status?: string;
+  operator_status?: string;
+  operating_state?: string;
+  operating_city?: string | null;
+  invite_status?: string;
+  invite_expires_at?: string | null;
+  logistics_roles?: string[];
+};
+
 type DeliverAndEarnWalletSummary = {
   available_balance: number;
   pending_balance: number;
@@ -150,6 +164,38 @@ export async function fetchDeliverAndEarnSnapshot(operatorId: string): Promise<D
     activeShipment: activeShipment ?? null,
     availableBalance: Number(walletSummary?.available_balance || 0),
     pendingBalance: Number(walletSummary?.pending_balance || 0) + Number(walletSummary?.payout_requested_balance || 0),
+  };
+}
+
+export async function fetchDeliverAndEarnOperatorAccessContext(): Promise<DeliverAndEarnOperatorAccessContext> {
+  const { data, error } = await supabase.rpc('deliver_and_earn_operator_access_context');
+  if (error) throw error;
+  return (data || {
+    operator_mode: 'none',
+    can_use_rider_app: false,
+    is_staff_operator: false,
+    logistics_roles: [],
+  }) as DeliverAndEarnOperatorAccessContext;
+}
+
+export async function acceptDeliverAndEarnOperatorInvite(params: {
+  inviteToken?: string | null;
+  inviteCode?: string | null;
+}) {
+  const { data, error } = await supabase.rpc('accept_deliver_and_earn_operator_invite', {
+    p_payload: {
+      invite_token: params.inviteToken || null,
+      invite_code: params.inviteCode || null,
+      source: 'rider_app',
+    },
+  });
+
+  if (error) throw error;
+  return data as {
+    profile_id?: string;
+    invite_status?: string;
+    operator_mode?: string;
+    message?: string;
   };
 }
 
