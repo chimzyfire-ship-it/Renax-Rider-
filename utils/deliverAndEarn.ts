@@ -138,6 +138,7 @@ export async function fetchDeliverAndEarnSnapshot(operatorId: string): Promise<D
       .select('*, shipments(tracking_id, pickup_address, delivery_address, package_category, estimated_price, carrier_commission_amount)')
       .eq('operator_id', operatorId)
       .eq('offer_status', 'offered')
+      .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false })
       .limit(10)
     ),

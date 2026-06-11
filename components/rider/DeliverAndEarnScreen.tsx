@@ -31,9 +31,9 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   const [pickupOtp, setPickupOtp] = useState('');
   const [deliveryOtp, setDeliveryOtp] = useState('');
 
-  const loadSnapshot = useCallback(async () => {
+  const loadSnapshot = useCallback(async (options?: { silent?: boolean }) => {
     if (!operatorId) return;
-    setLoading(true);
+    if (!options?.silent) setLoading(true);
     try {
       const data = await Promise.race([
         fetchDeliverAndEarnSnapshot(operatorId),
@@ -45,9 +45,11 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
       setMessage('');
     } catch (error) {
       console.error('Failed to load Deliver & Earn rider data', error);
-      setMessage(error instanceof Error ? error.message : 'Deliver & Earn is not ready on this backend yet.');
+      if (!options?.silent) {
+        setMessage(error instanceof Error ? error.message : 'Deliver & Earn is not ready on this backend yet.');
+      }
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }, [operatorId]);
 
@@ -59,6 +61,14 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   const isApproved = snapshot?.profile?.application_status === 'approved' && snapshot.profile.operator_status === 'active';
   const isOnline = Boolean(snapshot?.availability?.is_online);
   const activeShipment = snapshot?.activeShipment ?? null;
+
+  useEffect(() => {
+    if (!operatorId || !isOnline) return;
+    const interval = setInterval(() => {
+      loadSnapshot({ silent: true });
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isOnline, loadSnapshot, operatorId]);
 
   const readiness = useMemo(() => {
     const profile = snapshot?.profile;
@@ -171,7 +181,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
             <Text style={styles.pageTitle}>Deliver & Earn</Text>
             <Text style={styles.pageSub}>Approved personal-car owners carry RENAX intra-state shipments and earn per completed delivery.</Text>
           </View>
-          <Pressable style={styles.refreshBtn} onPress={loadSnapshot}>
+          <Pressable style={styles.refreshBtn} onPress={() => loadSnapshot()}>
             <RefreshCw size={16} color="#002B22" />
           </Pressable>
         </Animated.View>
