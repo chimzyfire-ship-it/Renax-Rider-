@@ -71,6 +71,7 @@ type LiveJob = {
   destination_terminal_id?: string | null;
   relay_first_mile_strategy?: 'customer_dropoff' | 'renax_pickup' | null;
   relay_last_mile_strategy?: 'recipient_pickup' | 'renax_delivery' | null;
+  carrier_search_expires_at?: string | null;
   is_agro_shipment?: boolean | null;
   agro_produce_category?: string | null;
   agro_handling_notes?: string | null;
@@ -89,7 +90,9 @@ type RiderProfile = {
   vehicle?: string;
 };
 
-const LIVE_JOB_WINDOW_MS = 2 * 60 * 1000;
+const LOCAL_CARRIER_SEARCH_SECONDS = 90;
+const LOCAL_CARRIER_SEARCH_MS = LOCAL_CARRIER_SEARCH_SECONDS * 1000;
+const TERMINAL_JOB_WINDOW_MS = 2 * 60 * 1000;
 const DECLINED_JOB_TTL_MS = 30 * 60 * 1000;
 const onlineStorageKey = (riderId?: string | null) => `renax:rider-online:${riderId || 'unknown'}`;
 const declinedJobsStorageKey = (riderId?: string | null) => `renax:rider-declined:${riderId || 'unknown'}`;
@@ -112,11 +115,40 @@ const writeOnlinePreference = (riderId: string | null | undefined, value: 'true'
 };
 
 function isFreshLiveJob(job: LiveJob | null | undefined) {
+  if (job?.dispatch_stage === 'awaiting_rider_acceptance') {
+    return getLiveJobRemainingSeconds(job) > 0;
+  }
+
   const timestamp = job?.updated_at || job?.created_at;
   if (!timestamp) return false;
   const time = new Date(timestamp).getTime();
   if (!Number.isFinite(time)) return false;
-  return Date.now() - time <= LIVE_JOB_WINDOW_MS;
+  return Date.now() - time <= TERMINAL_JOB_WINDOW_MS;
+}
+
+function getLiveJobRemainingSeconds(job: LiveJob | null | undefined) {
+  if (!job) return 0;
+
+  if (job.carrier_search_expires_at) {
+    const expiresAt = new Date(job.carrier_search_expires_at).getTime();
+    if (Number.isFinite(expiresAt)) {
+      return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    }
+  }
+
+  const timestamp = job.updated_at || job.created_at;
+  if (!timestamp) return 0;
+  const startedAt = new Date(timestamp).getTime();
+  if (!Number.isFinite(startedAt)) return 0;
+  return Math.max(0, Math.ceil((startedAt + LOCAL_CARRIER_SEARCH_MS - Date.now()) / 1000));
+}
+
+function getJobResponseSeconds(job: LiveJob | null | undefined) {
+  if (!job) return 60;
+  if (job.dispatch_stage === 'awaiting_rider_acceptance') {
+    return Math.max(1, Math.min(LOCAL_CARRIER_SEARCH_SECONDS, getLiveJobRemainingSeconds(job)));
+  }
+  return 60;
 }
 
 function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -161,6 +193,7 @@ export default function HomeScreen({
   const [presenceReady, setPresenceReady] = useState(false);
   const [showJobAlert, setShowJobAlert] = useState(false);
   const [jobTimer, setJobTimer] = useState(60);
+  const [jobTimerTotal, setJobTimerTotal] = useState(60);
   const [currentJob, setCurrentJob] = useState<LiveJob | null>(null);
   const riderId = rider?.id || null;
   const riderState = rider?.state || 'Lagos';
@@ -172,6 +205,7 @@ export default function HomeScreen({
   const refreshRef = useRef<any>(null);
   const isOnlineRef = useRef(false);
   const showJobAlertRef = useRef(false);
+  const currentJobRef = useRef<LiveJob | null>(null);
   const isAcceptingRef = useRef(false);
   const busyShipmentId = activeJob?.id || null;
 
@@ -325,6 +359,55 @@ export default function HomeScreen({
     };
   }, [rider?.id]);
 
+  const loadLocalMarketplaceJobs = async () => {
+    const rpcResult = await supabase.rpc('live_intrastate_rider_jobs', { p_limit: 150 });
+    if (!rpcResult.error) {
+      return { data: rpcResult.data || [], error: null };
+    }
+
+    const rpcMessage = rpcResult.error.message || '';
+    const rpcMissing =
+      rpcMessage.includes('live_intrastate_rider_jobs') &&
+      (rpcMessage.includes('schema cache') || rpcMessage.includes('Could not find the function'));
+
+    if (!rpcMissing) {
+      return rpcResult;
+    }
+
+    const recentCutoff = new Date(Date.now() - LOCAL_CARRIER_SEARCH_MS).toISOString();
+    const liveWindowResult = await supabase
+      .from('shipments')
+      .select('*')
+      .ilike('pickup_state', riderState)
+      .eq('dispatch_stage', 'awaiting_rider_acceptance')
+      .is('assigned_rider_id', null)
+      .is('final_mile_rider_id', null)
+      .is('deliver_and_earn_operator_id', null)
+      .gt('carrier_search_expires_at', new Date().toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(150);
+
+    if (!liveWindowResult.error) {
+      return liveWindowResult;
+    }
+
+    const windowMessage = liveWindowResult.error.message || '';
+    if (!windowMessage.includes('carrier_search_expires_at')) {
+      return liveWindowResult;
+    }
+
+    return supabase
+      .from('shipments')
+      .select('*')
+      .ilike('pickup_state', riderState)
+      .eq('dispatch_stage', 'awaiting_rider_acceptance')
+      .is('assigned_rider_id', null)
+      .is('final_mile_rider_id', null)
+      .gte('updated_at', recentCutoff)
+      .order('updated_at', { ascending: false })
+      .limit(150);
+  };
+
   const fetchEligibleJobs = async () => {
     if (busyShipmentId) {
       setShowJobAlert(false);
@@ -332,28 +415,17 @@ export default function HomeScreen({
       return;
     }
 
-    const recentCutoff = new Date(Date.now() - LIVE_JOB_WINDOW_MS).toISOString();
+    const terminalRecentCutoff = new Date(Date.now() - TERMINAL_JOB_WINDOW_MS).toISOString();
     const [pickupJobs, finalMileJobs] = await Promise.all([
-      canTakeLocalMarketplaceJobs
-        ? supabase
-          .from('shipments')
-          .select('*')
-          .eq('pickup_state', riderState)
-          .eq('dispatch_stage', 'awaiting_rider_acceptance')
-          .is('assigned_rider_id', null)
-          .is('final_mile_rider_id', null)
-          .gte('updated_at', recentCutoff)
-          .order('created_at', { ascending: false })
-          .limit(25)
-        : Promise.resolve({ data: [], error: null } as any),
+      canTakeLocalMarketplaceJobs ? loadLocalMarketplaceJobs() : Promise.resolve({ data: [], error: null } as any),
       canTakeRelayFinalMileJobs
         ? supabase
           .from('shipments')
           .select('*')
-          .eq('delivery_state', riderState)
+          .ilike('delivery_state', riderState)
           .eq('dispatch_stage', 'awaiting_final_mile_rider')
           .is('final_mile_rider_id', null)
-          .gte('updated_at', recentCutoff)
+          .gte('updated_at', terminalRecentCutoff)
           .order('created_at', { ascending: false })
           .limit(25)
         : Promise.resolve({ data: [], error: null } as any),
@@ -380,7 +452,6 @@ export default function HomeScreen({
 
     const data = [...eligiblePickupJobs, ...eligibleFinalMileJobs];
 
-    if (!data?.length || showJobAlertRef.current || isAcceptingRef.current) return;
     const declinedJobs = await readDeclinedJobs(rider?.id);
     const now = Date.now();
     const freshJobs = data.filter((job: LiveJob) => {
@@ -388,7 +459,18 @@ export default function HomeScreen({
       const declinedAt = Number(declinedJobs?.[job.id] || 0);
       return !declinedAt || now - declinedAt > DECLINED_JOB_TTL_MS;
     });
-    if (!freshJobs.length) return;
+
+    const visibleCurrentJob = currentJobRef.current;
+    if (showJobAlertRef.current || visibleCurrentJob) {
+      if (visibleCurrentJob && !freshJobs.some((job: LiveJob) => job.id === visibleCurrentJob.id)) {
+        clearInterval(timerRef.current);
+        setShowJobAlert(false);
+        setCurrentJob(null);
+      }
+      return;
+    }
+
+    if (!freshJobs.length || isAcceptingRef.current) return;
 
     let chosenJob = freshJobs[0] as LiveJob;
 
@@ -426,9 +508,12 @@ export default function HomeScreen({
       // Fall back to freshest job if location is unavailable.
     }
 
+    const responseSeconds = getJobResponseSeconds(chosenJob);
+    if (responseSeconds <= 0) return;
     setCurrentJob(chosenJob);
     setShowJobAlert(true);
-    setJobTimer(60);
+    setJobTimer(responseSeconds);
+    setJobTimerTotal(responseSeconds);
   };
 
   // ── Live stats from Supabase ──────────────────────────────────────────────
@@ -478,6 +563,10 @@ export default function HomeScreen({
   }, [showJobAlert]);
 
   useEffect(() => {
+    currentJobRef.current = currentJob;
+  }, [currentJob]);
+
+  useEffect(() => {
     if (!busyShipmentId) return;
     clearInterval(timerRef.current);
     setShowJobAlert(false);
@@ -509,7 +598,7 @@ export default function HomeScreen({
           const isEligibleAwaitingAccept =
             canTakeLocalMarketplaceJobs
             && job.dispatch_stage === 'awaiting_rider_acceptance'
-            && job.pickup_state === riderState
+            && String(job.pickup_state || '').toLowerCase() === String(riderState || '').toLowerCase()
             && job.routing_mode !== 'relay_terminal';
           if (!isRelayFinalMile && !isEligibleAwaitingAccept) return;
           fetchEligibleJobs();
@@ -523,7 +612,7 @@ export default function HomeScreen({
         }, (payload: any) => {
           const job = (payload.new || payload.record) as LiveJob;
           if (!isFreshLiveJob(job)) return;
-          if (!canTakeRelayFinalMileJobs || !job || job.delivery_state !== riderState) return;
+          if (!canTakeRelayFinalMileJobs || !job || String(job.delivery_state || '').toLowerCase() !== String(riderState || '').toLowerCase()) return;
           fetchEligibleJobs();
           if (Platform.OS !== 'web') Vibration.vibrate([500, 300, 500, 300, 500]);
         })
@@ -578,13 +667,13 @@ export default function HomeScreen({
     if (showJobAlert) {
       timerRef.current = setInterval(() => {
         setJobTimer(t => {
-          if (t <= 1) { clearInterval(timerRef.current); setShowJobAlert(false); setCurrentJob(null); return 60; }
+          if (t <= 1) { clearInterval(timerRef.current); setShowJobAlert(false); setCurrentJob(null); return jobTimerTotal; }
           return t - 1;
         });
       }, 1000);
       return () => clearInterval(timerRef.current);
     }
-  }, [showJobAlert]);
+  }, [jobTimerTotal, showJobAlert]);
 
   const handleAccept = async () => {
     // Guard: prevent double-tap and re-entry
@@ -639,7 +728,9 @@ export default function HomeScreen({
       console.error('[RENAX] Shipment acceptance failed:', err);
       setCurrentJob(jobSnapshot);
       setShowJobAlert(true);
-      setJobTimer(60);
+      const responseSeconds = getJobResponseSeconds(jobSnapshot);
+      setJobTimer(responseSeconds);
+      setJobTimerTotal(responseSeconds);
       isAcceptingRef.current = false;
       if (Platform.OS === 'web') {
         alert(`[RENAX DEBUG] Job acceptance failed:\n${err?.message || String(err)}\n\nCode: ${err?.code || 'none'}\nDetails: ${err?.details || 'none'}\nHint: ${err?.hint || 'none'}\n\nShipment ID: ${jobSnapshot.id}\nRider ID: ${rider?.id || 'none'}\nAssignment Type: ${assignmentType}`);
@@ -663,6 +754,7 @@ export default function HomeScreen({
     clearInterval(timerRef.current);
     setShowJobAlert(false);
     setJobTimer(60);
+    setJobTimerTotal(60);
     const declinedJob = currentJob;
     setCurrentJob(null);
     if (!declinedJob) return;
@@ -769,7 +861,7 @@ export default function HomeScreen({
         <View style={styles.modalOverlay}>
           <Animated.View entering={FadeInDown.duration(400)} style={styles.jobAlert}>
             <View style={styles.timerBarBg}>
-              <View style={[styles.timerBarFill, { width: `${(jobTimer / 60) * 100}%` as any }]} />
+              <View style={[styles.timerBarFill, { width: `${Math.max(0, Math.min(100, (jobTimer / Math.max(jobTimerTotal, 1)) * 100))}%` as any }]} />
             </View>
             <Text style={styles.timerText}>{jobTimer}s to respond</Text>
 
