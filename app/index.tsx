@@ -29,12 +29,24 @@ function getPendingDeliverEarnInviteToken() {
   }
 }
 
+function getPendingDeliverEarnInviteCode() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('deliver_earn_invite_code') || params.get('de_invite_code');
+  } catch {
+    return null;
+  }
+}
+
 function clearDeliverEarnInviteTokenFromUrl() {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return;
   try {
     const url = new URL(window.location.href);
     url.searchParams.delete('deliver_earn_invite');
     url.searchParams.delete('de_invite');
+    url.searchParams.delete('deliver_earn_invite_code');
+    url.searchParams.delete('de_invite_code');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   } catch {
     // URL cleanup is non-critical.
@@ -48,7 +60,7 @@ export default function RootIndex() {
   const [pendingInviteToken, setPendingInviteToken] = useState(() => getPendingDeliverEarnInviteToken());
   const [authMessage, setAuthMessage] = useState('');
   const pendingInviteTokenRef = useRef<string | null>(pendingInviteToken);
-  const pendingInviteCodeRef = useRef<string | null>(null);
+  const pendingInviteCodeRef = useRef<string | null>(getPendingDeliverEarnInviteCode());
 
   const rememberDeliverEarnInviteCode = useCallback((inviteCode?: string | null) => {
     pendingInviteCodeRef.current = inviteCode?.trim() || null;
