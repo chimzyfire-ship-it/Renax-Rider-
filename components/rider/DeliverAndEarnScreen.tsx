@@ -61,6 +61,8 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   const isApproved = snapshot?.profile?.application_status === 'approved' && snapshot.profile.operator_status === 'active';
   const isOnline = Boolean(snapshot?.availability?.is_online);
   const activeShipment = snapshot?.activeShipment ?? null;
+  const pickupVerified = Boolean(activeShipment?.pickup_verified_at);
+  const deliveryVerified = Boolean(activeShipment?.delivery_verified_at);
 
   useEffect(() => {
     if (!operatorId || !isApproved || !isOnline) return;
@@ -146,7 +148,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   };
 
   const handlePickup = async () => {
-    if (!activeShipment) return;
+    if (!activeShipment || pickupVerified) return;
     setBusyId('pickup');
     setMessage('');
     try {
@@ -162,7 +164,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   };
 
   const handleDelivery = async () => {
-    if (!activeShipment) return;
+    if (!activeShipment || !pickupVerified || deliveryVerified) return;
     setBusyId('delivery');
     setMessage('');
     try {
@@ -262,22 +264,48 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
 
                 <View style={styles.proofBlock}>
                   <Text style={styles.cardLabel}>Pickup OTP</Text>
+                  <Text style={styles.proofStatus}>
+                    {pickupVerified ? 'Pickup confirmed. Continue with the recipient delivery OTP.' : 'Enter the sender pickup OTP at collection.'}
+                  </Text>
                   <View style={styles.proofRow}>
-                    <TextInput value={pickupOtp} onChangeText={setPickupOtp} placeholder="Pickup code" placeholderTextColor="#4B6B58" style={styles.otpInput} keyboardType="numeric" />
-                    <Pressable style={styles.proofBtn} onPress={handlePickup} disabled={busyId === 'pickup'}>
+                    <TextInput
+                      value={pickupVerified ? '' : pickupOtp}
+                      onChangeText={setPickupOtp}
+                      placeholder={pickupVerified ? 'Pickup verified' : 'Pickup code'}
+                      placeholderTextColor="#4B6B58"
+                      style={[styles.otpInput, pickupVerified && styles.otpInputDisabled]}
+                      keyboardType="numeric"
+                      editable={!pickupVerified && busyId !== 'pickup'}
+                    />
+                    <Pressable style={[styles.proofBtn, pickupVerified && styles.disabledBtn]} onPress={handlePickup} disabled={pickupVerified || busyId === 'pickup'}>
                       <Package size={16} color="#002B22" />
-                      <Text style={styles.proofBtnText}>Verify Pickup</Text>
+                      <Text style={styles.proofBtnText}>{pickupVerified ? 'Pickup Verified' : 'Verify Pickup'}</Text>
                     </Pressable>
                   </View>
                 </View>
 
                 <View style={styles.proofBlock}>
                   <Text style={styles.cardLabel}>Delivery OTP</Text>
+                  <Text style={styles.proofStatus}>
+                    {deliveryVerified ? 'Delivery completed.' : pickupVerified ? 'Enter the recipient delivery OTP at drop-off.' : 'Delivery OTP unlocks after pickup is verified.'}
+                  </Text>
                   <View style={styles.proofRow}>
-                    <TextInput value={deliveryOtp} onChangeText={setDeliveryOtp} placeholder="Delivery code" placeholderTextColor="#4B6B58" style={styles.otpInput} keyboardType="numeric" />
-                    <Pressable style={styles.proofBtn} onPress={handleDelivery} disabled={busyId === 'delivery'}>
+                    <TextInput
+                      value={deliveryVerified ? '' : deliveryOtp}
+                      onChangeText={setDeliveryOtp}
+                      placeholder={deliveryVerified ? 'Delivery completed' : pickupVerified ? 'Delivery code' : 'Verify pickup first'}
+                      placeholderTextColor="#4B6B58"
+                      style={[styles.otpInput, (!pickupVerified || deliveryVerified) && styles.otpInputDisabled]}
+                      keyboardType="numeric"
+                      editable={pickupVerified && !deliveryVerified && busyId !== 'delivery'}
+                    />
+                    <Pressable
+                      style={[styles.proofBtn, (!pickupVerified || deliveryVerified) && styles.disabledBtn]}
+                      onPress={handleDelivery}
+                      disabled={!pickupVerified || deliveryVerified || busyId === 'delivery'}
+                    >
                       <CheckCircle2 size={16} color="#002B22" />
-                      <Text style={styles.proofBtnText}>Complete</Text>
+                      <Text style={styles.proofBtnText}>{deliveryVerified ? 'Completed' : pickupVerified ? 'Complete' : 'Pickup First'}</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -370,6 +398,8 @@ const styles = StyleSheet.create({
   proofBlock: { gap: 7 },
   proofRow: { flexDirection: 'row', gap: 10 },
   otpInput: { flex: 1, borderWidth: 1, borderColor: 'rgba(204,253,58,0.18)', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, fontFamily: 'Outfit_6', color: '#fff', backgroundColor: 'rgba(255,255,255,0.04)' },
+  otpInputDisabled: { opacity: 0.55 },
+  proofStatus: { fontFamily: 'Outfit_4', color: 'rgba(200,255,220,0.58)', fontSize: 12, lineHeight: 18 },
   proofBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#ccfd3a', borderRadius: 12, paddingHorizontal: 12 },
   proofBtnText: { fontFamily: 'Outfit_7', color: '#002B22', fontSize: 12 },
   offerCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.04)', padding: 14 },

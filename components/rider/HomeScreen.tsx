@@ -90,7 +90,7 @@ type RiderProfile = {
   vehicle?: string;
 };
 
-const LOCAL_CARRIER_SEARCH_SECONDS = 90;
+const LOCAL_CARRIER_SEARCH_SECONDS = 300;
 const LOCAL_CARRIER_SEARCH_MS = LOCAL_CARRIER_SEARCH_SECONDS * 1000;
 const TERMINAL_JOB_WINDOW_MS = 2 * 60 * 1000;
 const DECLINED_JOB_TTL_MS = 30 * 60 * 1000;
@@ -360,6 +360,25 @@ export default function HomeScreen({
   }, [rider?.id]);
 
   const loadLocalMarketplaceJobs = async () => {
+    const stateRpcResult = await supabase.rpc('live_intrastate_rider_jobs_for_state', {
+      p_payload: {
+        limit: 150,
+        state: riderState,
+      },
+    });
+    if (!stateRpcResult.error) {
+      return { data: stateRpcResult.data || [], error: null };
+    }
+
+    const stateRpcMessage = stateRpcResult.error.message || '';
+    const stateRpcMissing =
+      stateRpcMessage.includes('live_intrastate_rider_jobs_for_state') &&
+      (stateRpcMessage.includes('schema cache') || stateRpcMessage.includes('Could not find the function'));
+
+    if (!stateRpcMissing) {
+      return stateRpcResult;
+    }
+
     const rpcResult = await supabase.rpc('live_intrastate_rider_jobs', { p_limit: 150 });
     if (!rpcResult.error) {
       return { data: rpcResult.data || [], error: null };
