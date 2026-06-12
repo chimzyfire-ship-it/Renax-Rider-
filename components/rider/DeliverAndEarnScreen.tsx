@@ -63,12 +63,29 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
   const activeShipment = snapshot?.activeShipment ?? null;
 
   useEffect(() => {
-    if (!operatorId || !isOnline) return;
-    const interval = setInterval(() => {
-      loadSnapshot({ silent: true });
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [isOnline, loadSnapshot, operatorId]);
+    if (!operatorId || !isApproved || !isOnline) return;
+
+    let stopped = false;
+    const vehicleId = snapshot?.availability?.vehicle_id || primaryVehicle?.id || null;
+
+    const refreshOnlinePresence = async () => {
+      try {
+        await setDeliverAndEarnOnline(true, vehicleId);
+        if (!stopped) {
+          await loadSnapshot({ silent: true });
+        }
+      } catch (error) {
+        console.error('Deliver & Earn online heartbeat failed', error);
+      }
+    };
+
+    refreshOnlinePresence();
+    const interval = setInterval(refreshOnlinePresence, 10000);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [isApproved, isOnline, loadSnapshot, operatorId, primaryVehicle?.id, snapshot?.availability?.vehicle_id]);
 
   const readiness = useMemo(() => {
     const profile = snapshot?.profile;
