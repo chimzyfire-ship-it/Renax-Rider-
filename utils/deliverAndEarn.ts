@@ -85,6 +85,22 @@ type DeliverAndEarnWalletSummary = {
 
 const SNAPSHOT_QUERY_TIMEOUT_MS = 6000;
 
+function normalizeSnapshotPayload(payload: any): DeliverAndEarnSnapshot {
+  const walletSummary = payload?.walletSummary || payload?.wallet_summary || {};
+
+  return {
+    profile: payload?.profile ?? null,
+    vehicles: Array.isArray(payload?.vehicles) ? payload.vehicles : [],
+    availability: payload?.availability ?? null,
+    offers: Array.isArray(payload?.offers) ? payload.offers : [],
+    activeShipment: payload?.activeShipment ?? payload?.active_shipment ?? null,
+    availableBalance: Number(payload?.availableBalance ?? walletSummary.available_balance ?? 0),
+    pendingBalance: Number(payload?.pendingBalance ?? (
+      Number(walletSummary.pending_balance || 0) + Number(walletSummary.payout_requested_balance || 0)
+    )),
+  };
+}
+
 async function safeSnapshotQuery<T>(label: string, queryFn: () => PromiseLike<{ data: T | null; error: any }>): Promise<T | null> {
   try {
     const timeoutResult = new Promise<{ data: T | null; error: any }>((resolve) => {
@@ -109,6 +125,18 @@ async function safeSnapshotQuery<T>(label: string, queryFn: () => PromiseLike<{ 
 }
 
 export async function fetchDeliverAndEarnSnapshot(operatorId: string): Promise<DeliverAndEarnSnapshot> {
+  const { data: snapshotPayload, error: snapshotError } = await supabase.rpc('deliver_and_earn_operator_snapshot', {
+    p_operator_id: operatorId,
+  });
+
+  if (!snapshotError && snapshotPayload) {
+    return normalizeSnapshotPayload(snapshotPayload);
+  }
+
+  if (snapshotError) {
+    console.warn('[DeliverAndEarnRider] snapshot rpc unavailable, falling back to table queries:', snapshotError.message || snapshotError);
+  }
+
   const [profile, vehicles, availability, offers, activeShipment, walletSummary] = await Promise.all([
     safeSnapshotQuery<DeliverAndEarnProfile>('profile', () =>
       supabase

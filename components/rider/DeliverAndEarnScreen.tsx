@@ -80,7 +80,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
     };
 
     refreshOnlinePresence();
-    const interval = setInterval(refreshOnlinePresence, 10000);
+    const interval = setInterval(refreshOnlinePresence, 5000);
     return () => {
       stopped = true;
       clearInterval(interval);
@@ -248,7 +248,7 @@ export default function DeliverAndEarnScreen({ rider }: { rider?: { id?: string 
                   disabled={!isApproved || busyId === 'online'}
                 >
                   {busyId === 'online' ? <ActivityIndicator color={isOnline ? '#fff' : '#002B22'} /> : <Power size={18} color={isOnline ? '#fff' : '#002B22'} />}
-                  <Text style={[styles.onlineBtnText, isOnline && styles.onlineBtnTextActive]}>{isOnline ? 'Offline' : 'Online'}</Text>
+                  <Text style={[styles.onlineBtnText, isOnline && styles.onlineBtnTextActive]}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
                 </Pressable>
               </View>
             </View>
